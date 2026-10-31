@@ -237,22 +237,23 @@ function extractInPage(generic) {
 		let u = null;
 		const ss = img.getAttribute('srcset') || img.getAttribute('data-srcset');
 		if (ss) {
+			// URLs may contain commas (image-resizing CDNs), so match "URL descriptor" pairs instead of splitting on commas
 			let bw = -1;
-			ss.split(',').forEach((p) => {
-				const [url, d] = p.trim().split(/\s+/);
-				const w = parseFloat(d) || 0;
-				if (url && w >= bw) {
+			for (const m of ss.matchAll(/(?:^|,\s*)([^\s,][^\s]*)\s+([\d.]+)([wx])/g)) {
+				const w = parseFloat(m[2]) * (m[3] === 'x' ? 1000 : 1);
+				if (w >= bw) {
 					bw = w;
-					u = url;
+					u = m[1];
 				}
-			});
+			}
+			if (!u && !/\s/.test(ss.trim())) u = ss.trim();
 		}
 		u = u || img.getAttribute('data-src') || img.getAttribute('data-lazy-src') || img.getAttribute('data-original');
 		if (!u || u.startsWith('data:')) u = img.currentSrc || img.getAttribute('src');
 		return u && !u.startsWith('data:') ? abs(u) : null;
 	}
 	function pushImg(url, alt, how) {
-		if (!url) return;
+		if (!url || /\/(null|undefined)(?:[?#]|$)/i.test(url)) return;
 		imgs.push({ url, alt: alt || '', how });
 		out.push(`<img src="${escA(url)}" alt="${escA(alt || '')}">`);
 	}
@@ -465,6 +466,12 @@ function imageCandidates(u) {
 		list.push(`${m[1]}opt/${m[2]}-1920w.${m[5]}`);
 		list.push(`${m[1]}${m[2]}.${m[5]}`);
 	}
+	// image-resizing services: prefer the original file over the cropped/resized rendition
+	let cm;
+	if ((cm = u.match(/^(https?:\/\/[^/]+)\/cdn-cgi\/image\/[^/]+\/(.+)$/i))) list.unshift(`${cm[1]}/${cm[2]}`); // Cloudflare Image Resizing (Hostinger/Zyro, many others)
+	if ((cm = u.match(/^(https?:\/\/static\.wixstatic\.com\/media\/[^/]+\.(?:jpe?g|png|gif|webp))\/v1\/.+$/i))) list.unshift(cm[1]); // Wix
+	if ((cm = u.match(/^(https?:\/\/[^?]+\.(?:jpe?g|png|gif|webp))\?(?:.*&)?format=\d+w/i))) list.unshift(`${cm[1]}?format=original`); // Squarespace
+	if ((cm = u.match(/^(https?:\/\/[^?#]+?)-\d{2,4}x\d{2,4}(\.(?:jpe?g|png|gif|webp))$/i)) && /\/wp-content\//.test(u)) list.unshift(cm[1] + cm[2]); // WordPress thumbnail -> original
 	list.push(u);
 	return [...new Set(list)];
 }
@@ -621,7 +628,8 @@ const context = await browser.newContext({ viewport: { width: 1440, height: 900 
 const results = [];
 let navTree = null, design = null, footerText = '', logo = null, editor = 'unknown';
 let done = 0;
-await pool(queue, Number(opt.concurrency), async (rec) => {
+await pool(queue, GENERIC ? Math.min(2, Number(opt.concurrency)) : Number(opt.concurrency), async (rec) => {
+	if (GENERIC) await sleep(300 + Math.random() * 700);
 	const url = base + (rec.path === '/' ? '/' : rec.path);
 	const page = await context.newPage();
 	try {
@@ -633,6 +641,10 @@ await pool(queue, Number(opt.concurrency), async (rec) => {
 				if (attempt) throw e;
 				await sleep(1500);
 			}
+		}
+		for (let again = 0; again < 3 && resp && [403, 429, 502, 503].includes(resp.status()); again++) {
+			await sleep(2500 * (again + 1) + Math.random() * 1000);
+			resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 }).catch(() => resp);
 		}
 		await page.waitForLoadState('networkidle', { timeout: 12000 }).catch(() => {});
 		const status = resp ? resp.status() : 0;
