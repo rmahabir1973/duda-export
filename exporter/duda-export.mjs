@@ -5,7 +5,7 @@
  *   node duda-export.mjs --domain www.example.org [--site <duda_site_name>] [--out ./exports]
  *
  * Page text is taken from the rendered page DOM by code (no AI summarising), so it is verbatim.
- * DUDA API credentials are optional (DUDA_API_USER / DUDA_API_PASS) and add: draft/hidden pages, the
+ * DUDA access is optional: DUDA_MCP_TOKEN (+ DUDA_MCP_URL, default https://mcp.duda.co/mcp) or DUDA_API_USER / DUDA_API_PASS and add: draft/hidden pages, the
  * content library (official contact data), blog metadata (author, dates, tags), collections.
  */
 import { chromium } from 'playwright';
@@ -47,6 +47,8 @@ if (opt.help || (!opt.domain && !opt.site)) {
 const API_BASE = (opt['api-base'] || process.env.DUDA_API_BASE || 'https://api.duda.co/api').replace(/\/$/, '');
 const API_USER = process.env.DUDA_API_USER;
 const API_PASS = process.env.DUDA_API_PASS;
+const MCP_URL = (process.env.DUDA_MCP_URL || '').trim();
+const MCP_TOKEN = (process.env.DUDA_MCP_TOKEN || '').trim();
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36 DudaExport/1.0';
 const NOW_YEAR = new Date().getFullYear();
 
@@ -84,8 +86,84 @@ async function httpGet(url, { binary = false, timeout = 30000, headers = {} } = 
 }
 
 /* ------------------------------------------------------------------ DUDA API (optional) */
-const hasApi = Boolean(API_USER && API_PASS);
+const hasMcp = Boolean(MCP_TOKEN);
+const hasRest = Boolean(API_USER && API_PASS);
+const hasApi = hasMcp || hasRest;
+
+// --- DUDA MCP client (streamable HTTP, JSON-RPC). Same data as the REST API, authenticated with the account MCP token.
+let mcpSession = null, mcpId = 0, mcpAuth = null;
+async function mcpPost(body, { retryAuth = true } = {}) {
+	const url = MCP_URL || 'https://mcp.duda.co/mcp';
+	const authVariants = mcpAuth ? [mcpAuth] : [MCP_TOKEN, 'Bearer ' + MCP_TOKEN];
+	let lastErr;
+	for (const auth of authVariants) {
+		const headers = { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: auth, 'user-agent': UA };
+		if (mcpSession) headers['mcp-session-id'] = mcpSession;
+		const ctl = new AbortController();
+		const t = setTimeout(() => ctl.abort(), 60000);
+		try {
+			const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: ctl.signal });
+			if (r.status === 401 || r.status === 403) {
+				lastErr = new Error(`DUDA MCP HTTP ${r.status} (check DUDA_MCP_TOKEN)`);
+				continue;
+			}
+			mcpAuth = auth;
+			const sid = r.headers.get('mcp-session-id');
+			if (sid) mcpSession = sid;
+			const text = await r.text();
+			if (!r.ok && r.status !== 202) throw new Error(`DUDA MCP HTTP ${r.status}`);
+			if (!text.trim()) return null;
+			const ct = r.headers.get('content-type') || '';
+			let msgs = [];
+			if (/text\/event-stream/.test(ct)) {
+				for (const ev of text.split(/\n\n+/)) {
+					const data = ev.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim()).join('');
+					if (data) try { msgs.push(JSON.parse(data)); } catch {}
+				}
+			} else {
+				const j = JSON.parse(text);
+				msgs = Array.isArray(j) ? j : [j];
+			}
+			return msgs.find((m) => m.id === body.id) || msgs[0] || null;
+		} finally {
+			clearTimeout(t);
+		}
+	}
+	throw lastErr || new Error('DUDA MCP authentication failed');
+}
+async function mcpInit() {
+	if (mcpSession !== null) return;
+	const r = await mcpPost({ jsonrpc: '2.0', id: ++mcpId, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'duda-export', version: '1.1' } } });
+	if (r?.error) throw new Error('DUDA MCP initialize: ' + (r.error.message || JSON.stringify(r.error)));
+	if (!mcpSession) mcpSession = '';
+	await mcpPost({ jsonrpc: '2.0', method: 'notifications/initialized' }).catch(() => {});
+}
+async function mcpTool(name, args) {
+	await mcpInit();
+	const r = await mcpPost({ jsonrpc: '2.0', id: ++mcpId, method: 'tools/call', params: { name, arguments: args } });
+	if (!r) throw new Error(`DUDA MCP ${name}: empty response`);
+	if (r.error) throw new Error(`DUDA MCP ${name}: ${r.error.message || JSON.stringify(r.error)}`);
+	const txt = (r.result?.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('\n');
+	if (r.result?.isError) throw new Error(`DUDA MCP ${name}: ${txt.slice(0, 200)}`);
+	try {
+		return JSON.parse(txt);
+	} catch {
+		return txt;
+	}
+}
+// Map the REST-style paths used below onto MCP tools (the JSON shapes are the same).
+async function apiMcp(p) {
+	let m;
+	if ((m = p.match(/^\/sites\/multiscreen\/([^/?]+)\/pages/))) return mcpTool('list_pages', { site_name: m[1] });
+	if ((m = p.match(/^\/sites\/multiscreen\/([^/?]+)\/content/))) return mcpTool('get_content_library', { site_name: m[1] });
+	if ((m = p.match(/^\/sites\/multiscreen\/([^/?]+)\/blog\/posts\?limit=(\d+)&offset=(\d+)/))) return mcpTool('list_blog_posts', { site_name: m[1], limit: Number(m[2]), offset: Number(m[3]) });
+	if ((m = p.match(/^\/sites\/multiscreen\/([^/?]+)\/collection/))) return mcpTool('get_collections', { site_name: m[1] });
+	if ((m = p.match(/^\/sites\/multiscreen\/([^/?]+)$/))) return mcpTool('get_site_details', { site_name: m[1], fields: ['*'] });
+	throw new Error('unsupported MCP mapping ' + p);
+}
+
 async function api(p) {
+	if (hasMcp) return apiMcp(p);
 	const r = await httpGet(API_BASE + p, {
 		headers: { authorization: 'Basic ' + Buffer.from(`${API_USER}:${API_PASS}`).toString('base64'), accept: 'application/json' },
 	});
@@ -95,6 +173,10 @@ async function api(p) {
 const list = (x) => (Array.isArray(x) ? x : x?.results || x?.sites || x?.items || []);
 
 async function findSiteByDomain(domain) {
+	if (hasMcp) {
+		const r = await mcpTool('get_site_details', { domain, fields: ['site_name'] });
+		return (typeof r === 'object' && r?.site_name) || null;
+	}
 	const host = domain.replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/.*/, '').toLowerCase();
 	for (let off = 0; off < 5000; off += 100) {
 		const page = list(await api(`/sites/multiscreen?limit=100&offset=${off}`));
@@ -368,7 +450,7 @@ for (const d of ['pages', 'blog', 'images', 'documents', 'data']) fs.mkdirSync(p
 const flags = [];
 const flag = (severity, where, issue, detail = '') => flags.push({ severity, where, issue, detail });
 
-log(`\nDUDA export for ${domain}\n  output: ${outDir}\n  API: ${hasApi ? 'enabled' : 'off (set DUDA_API_USER / DUDA_API_PASS for drafts, content library and blog metadata)'}`);
+log(`\nDUDA export for ${domain}\n  output: ${outDir}\n  API: ${hasMcp ? 'enabled (DUDA MCP)' : hasRest ? 'enabled (REST)' : 'off (set DUDA_MCP_TOKEN or DUDA_API_USER / DUDA_API_PASS for drafts, content library and blog metadata)'}`);
 
 /* 1. inventory ---------------------------------------------------- */
 const inv = new Map(); // normalized path -> record
@@ -384,7 +466,7 @@ const addInv = (p, rec) => {
 let contentLibrary = null, blogMeta = [], collections = null, siteDetails = null, apiNote = '';
 if (hasApi) {
 	try {
-		if (!siteName && opt['find-site']) siteName = await findSiteByDomain(domain);
+		if (!siteName && (opt['find-site'] || hasMcp)) siteName = await findSiteByDomain(domain);
 		if (siteName) {
 			siteDetails = await api(`/sites/multiscreen/${siteName}`).catch((e) => (flag('warn', 'api', 'site details failed', e.message), null));
 			for (const pg of list(await api(`/sites/multiscreen/${siteName}/pages`).catch((e) => (flag('warn', 'api', 'pages failed', e.message), [])))) {

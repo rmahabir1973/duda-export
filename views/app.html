@@ -12,10 +12,10 @@
         <div><label for="maxPages">Max pages (optional)</label><input id="maxPages" type="number" min="0" placeholder="all"></div>
       </div>
       <div id="apiBox" hidden>
-        <label class="inline"><input id="useApi" type="checkbox" checked> Use the DUDA API (adds draft pages, content library, blog authors and dates)</label>
+        <label class="inline"><input id="useApi" type="checkbox" checked> Use DUDA account access (adds draft pages, content library, blog authors and dates)</label>
         <div id="siteBox"><label for="site">DUDA site name (optional)</label><input id="site" type="text" placeholder="leave empty to look it up from the domain" autocomplete="off"></div>
       </div>
-      <p class="hint" id="noApi" hidden>The DUDA API is not configured on this server: only public pages and the sitemap are used.</p>
+      <p class="hint" id="noApi" hidden>DUDA account access (DUDA_MCP_TOKEN) is not configured on this server: only public pages and the sitemap are used.</p>
       <label class="inline"><input id="skipImages" type="checkbox"> Skip images and documents (faster test)</label>
       <button class="primary" id="go" type="submit">Start export</button>
       <p class="err" id="err" role="alert"></p>

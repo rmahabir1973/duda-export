@@ -31,7 +31,7 @@ const RETENTION_MS = Number(env.RETENTION_HOURS || 48) * 3600 * 1000;
 const JOB_TIMEOUT_MS = Number(env.JOB_TIMEOUT_MIN || 45) * 60 * 1000;
 const SESSION_HOURS = Number(env.SESSION_HOURS || 12);
 const ALLOWED_DOMAINS = (env.ALLOWED_DOMAINS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-const API_AVAILABLE = Boolean(env.DUDA_API_USER && env.DUDA_API_PASS);
+const API_AVAILABLE = Boolean(env.DUDA_MCP_TOKEN || (env.DUDA_API_USER && env.DUDA_API_PASS));
 const EXPORTER = path.join(__dirname, 'exporter', 'duda-export.mjs');
 
 fs.mkdirSync(path.join(DATA_DIR, 'jobs'), { recursive: true });
@@ -135,6 +135,8 @@ function start(j) {
 	if (!j.useApi) {
 		delete childEnv.DUDA_API_USER;
 		delete childEnv.DUDA_API_PASS;
+		delete childEnv.DUDA_MCP_TOKEN;
+		delete childEnv.DUDA_MCP_URL;
 	}
 	const child = spawn(process.execPath, args, { env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
 	j.pid = child.pid;

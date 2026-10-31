@@ -18,7 +18,9 @@ browser (or an agent with the API token)  ->  this app (Express)  ->  duda-expor
    |---|---|---|
    | `APP_PASSWORD` | yes | The login password, 10+ characters (e.g. `openssl rand -base64 18`) |
    | `API_TOKEN` | no | 24+ characters. Lets scripts/agents call the API with `Authorization: Bearer ...` |
-   | `DUDA_API_USER`, `DUDA_API_PASS` | no | DUDA API credentials. Enables drafts, content library, blog authors/dates |
+   | `DUDA_MCP_TOKEN` | no | Your DUDA MCP token (Duda account settings). Enables drafts, content library, blog authors/dates. Preferred |
+   | `DUDA_MCP_URL` | no | DUDA MCP endpoint; defaults to `https://mcp.duda.co/mcp` |
+   | `DUDA_API_USER`, `DUDA_API_PASS` | no | Alternative to the MCP token: DUDA REST API credentials (only if you have them) |
    | `ALLOWED_DOMAINS` | no | Comma list (e.g. `churchwebglobal.com,erindaleunited.church`) to restrict what can be exported |
    | `MAX_CONCURRENT_JOBS` | no | Default 1. Each job uses about 1 GB RAM while Chromium runs |
    | `RETENTION_HOURS` | no | Default 48. ZIPs and logs are deleted after this |
@@ -39,7 +41,7 @@ cheap to regenerate. For persistence add a Railway Volume mounted at `/data`, se
 
 ## Using it
 
-* **Browser:** sign in, enter the church's live domain (`www.example.org`), optionally tick *Use the DUDA API*,
+* **Browser:** sign in, enter the church's live domain (`www.example.org`), optionally tick *Use DUDA account access*,
   press *Start export*. A full church site takes 4-8 minutes. Download the ZIP when the badge says *done*.
 * **Agents/scripts** (needs `API_TOKEN`):
   ```
