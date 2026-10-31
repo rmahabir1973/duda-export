@@ -78,3 +78,13 @@ Tested locally: login and lockout, bearer token, CSRF refusal, rejection of priv
 export of the live Erindale site through the browser UI (progress log, summary, ZIP download), cancel, delete, sign out.
 **Not tested:** the Docker image build and the Railway deployment itself (no Docker or Railway access from where this was built).
 If the first Railway build fails, send the build log.
+
+## Non-DUDA sites and prospect previews
+
+The exporter also works on **any other church website** (WordPress, Wix, Squarespace, Weebly, GoDaddy, hand-built). *Website type* defaults to automatic detection. Generic mode detects the main content of each page, drops menus, sidebars, footers and cookie banners, removes blocks repeated on most pages (logged in `data/boilerplate-removed.md`), and also finds pages from the home page menu when there is no sitemap.
+
+**Preview only** exports the home page plus up to 6 key pages (about, worship/times, visit/contact, ministries, staff), skips documents, and adds preview prompts to `assistant-prompts.md`. The package also contains:
+- `site-brief.md`: service times, address lines, schema.org data, phone and email found.
+- `data/brand.json` and a "Brand colours" section: dominant colours of the logo and the site's CSS, with a suggested primary and accent colour to use as custom colours in the Design gallery.
+
+Content belongs to the church: keep previews password-protected and noindex, and do not reuse photos of identifiable people.

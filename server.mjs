@@ -126,6 +126,8 @@ function start(j) {
 	const args = [EXPORTER, '--domain', j.domain, '--out', dir, '--concurrency', '3'];
 	if (j.opts.maxPages) args.push('--max-pages', String(j.opts.maxPages));
 	if (j.opts.skipImages) args.push('--skip-images');
+	if (j.opts.mode && j.opts.mode !== 'auto') args.push('--mode', j.opts.mode);
+	if (j.opts.preview) args.push('--preview');
 	if (j.useApi) {
 		if (j.site) args.push('--site', j.site);
 		else args.push('--find-site');
@@ -302,7 +304,9 @@ app.post('/api/jobs', need, async (req, res) => {
 		const maxPages = Math.min(MAX_PAGES_CAP, Math.max(0, parseInt(b.maxPages, 10) || 0));
 		const id = crypto.randomBytes(8).toString('hex');
 		fs.mkdirSync(jobDir(id), { recursive: true });
-		const j = { id, domain, site, useApi, status: 'queued', created: Date.now(), log: [], by: req.by, opts: { maxPages, skipImages: Boolean(b.skipImages) } };
+		const mode = ['auto', 'duda', 'generic'].includes(b.mode) ? b.mode : 'auto';
+		const preview = Boolean(b.preview);
+		const j = { id, domain, site, useApi, status: 'queued', created: Date.now(), log: [], by: req.by, opts: { maxPages, skipImages: Boolean(b.skipImages), mode, preview } };
 		jobs.set(id, j);
 		persist(j);
 		queue.push(j);

@@ -23,7 +23,7 @@ $('f').addEventListener('submit', async (e) => {
 	$('err').textContent = '';
 	$('go').disabled = true;
 	try {
-		const j = await api('/api/jobs', { method: 'POST', body: JSON.stringify({ domain: $('domain').value, site: $('site')?.value || '', useApi: $('useApi')?.checked || false, maxPages: $('maxPages').value, skipImages: $('skipImages').checked }) });
+		const j = await api('/api/jobs', { method: 'POST', body: JSON.stringify({ domain: $('domain').value, site: $('site')?.value || '', useApi: $('useApi')?.checked || false, maxPages: $('maxPages').value, skipImages: $('skipImages').checked, mode: $('mode').value, preview: $('preview').checked }) });
 		openLog = j.id;
 		$('domain').value = '';
 		refresh();
@@ -54,7 +54,7 @@ async function refresh() {
 		return;
 	}
 	$('rows').innerHTML = list.length
-		? list.map((j) => `<tr><td><b>${esc(j.domain)}</b><div class="small">${esc(when(j.created))}${j.useApi ? ' · API' : ''}</div></td>
+		? list.map((j) => `<tr><td><b>${esc(j.domain)}</b><div class="small">${esc(when(j.created))}${j.useApi ? ' · API' : ''}${j.opts && j.opts.preview ? ' · preview' : ''}</div></td>
 		<td><span class="badge ${j.status}">${j.status}</span></td><td>${result(j)}</td>
 		<td><div class="actions">${j.status === 'done' ? `<a href="/api/jobs/${j.id}/download"><button class="sm" type="button">Download ZIP</button></a>` : ''}
 		<button class="sm" data-act="log" data-id="${j.id}" type="button">Log</button>

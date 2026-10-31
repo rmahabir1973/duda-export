@@ -35,6 +35,9 @@ if (opt.help || (!opt.domain && !opt.site)) {
   --max-pages <n>       Only crawl the first n pages (testing)
   --only </a,/b>        Only export these paths (comma separated), e.g. to re-run a few pages
   --concurrency <n>     Parallel browser pages (default 3)
+  --mode <auto|duda|generic>  auto (default) detects DUDA vs any other website; generic works on WordPress, Wix, Squarespace, hand-built sites
+  --preview             Prospect preview: home + up to 6 key pages (about, worship, contact...), no documents
+  --skip-docs           Do not download documents (PDF, Word...)
   --include-noindex     Also export pages marked noindex (default: exported but flagged)
   --skip-images         Do not download images/documents
   --max-image-mb <n>    Skip images above this size (default 25)
@@ -44,6 +47,9 @@ if (opt.help || (!opt.domain && !opt.site)) {
 	process.exit(opt.help ? 0 : 1);
 }
 
+const MODE = ['duda', 'generic'].includes(String(opt.mode)) ? String(opt.mode) : 'auto';
+const PREVIEW = Boolean(opt.preview);
+const SKIP_DOCS = Boolean(opt['skip-docs']) || PREVIEW;
 const API_BASE = (opt['api-base'] || process.env.DUDA_API_BASE || 'https://api.duda.co/api').replace(/\/$/, '');
 const API_USER = process.env.DUDA_API_USER;
 const API_PASS = process.env.DUDA_API_PASS;
@@ -57,6 +63,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (...a) => console.log(...a);
 const slugify = (s) =>
 	String(s).normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/&/g, ' and ').replace(/['’]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'page';
+const lastSeg = (p) => decodeURIComponent(p.split('/').filter(Boolean).pop() || '').replace(/\.(html?|php|aspx?)$/i, '');
 const safeName = (s) => String(s).replace(/[^A-Za-z0-9._-]+/g, '-').replace(/-{2,}/g, '-').replace(/^[-.]+|[-.]+$/g, '').slice(0, 70) || 'file';
 const csvCell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
 const csv = (rows) => rows.map((r) => r.map(csvCell).join(',')).join('\n') + '\n';
@@ -189,7 +196,7 @@ async function findSiteByDomain(domain) {
 }
 
 /* ------------------------------------------------------------------ in-page extractor (runs in the browser) */
-function extractInPage() {
+function extractInPage(generic) {
 	const IMG_EXT = /\.(?:jpe?g|png|gif|webp|svg|avif)(?:[?#]|$)/i;
 	const DOC_EXT = /\.(pdf|docx?|xlsx?|pptx?|rtf|txt|csv|zip|mp3|m4a|wav|mp4|mov)(?:[?#]|$)/i;
 	const abs = (u) => {
@@ -199,6 +206,7 @@ function extractInPage() {
 			return null;
 		}
 	};
+	const metaOf = (n) => document.querySelector(`meta[name="${n}"],meta[property="${n}"]`)?.getAttribute('content') || '';
 	const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 	const escA = (s) => esc(s).replace(/"/g, '&quot;');
 	const cf = (hex) => {
@@ -208,7 +216,19 @@ function extractInPage() {
 		return o;
 	};
 	const skip = 'script,style,noscript,template,svg,nav,header,footer,.dmPopup,[class*="dmHeader"],[class*="dmFooter"],[id*="cookie" i],[class*="cookie" i],[class*="dmAdminOnly"]';
-	const root = document.querySelector('#dm_content') || document.querySelector('main') || document.body;
+	const skipG = 'script,style,noscript,template,svg,nav,footer,aside,[role=navigation],[role=banner],[role=contentinfo],[role=complementary],.sidebar,.widget-area,#comments,.comments-area,#respond,.breadcrumb,.breadcrumbs,[class*="breadcrumb" i],.social-links,.social-icons,.sharedaddy,.addtoany_share_save_container,[class*="share-buttons" i],[id*="cookie" i],[class*="cookie-" i],[class*="cookiebot" i],[id*="onetrust" i],[class*="cmplz" i],[class*="gdpr" i],.screen-reader-text,[class*="skip-link" i],[class*="sr-only" i]';
+	const textLen = (e) => ((e && e.innerText) || '').trim().length;
+	let root;
+	if (generic) {
+		for (const sel of ['main', '[role=main]', 'article', '.entry-content', '#content', '.site-content', '#main', '.content', '#page', '#SITE_CONTAINER']) {
+			const e = document.querySelector(sel);
+			if (e && textLen(e) >= 120) {
+				root = e;
+				break;
+			}
+		}
+		root = root || document.body;
+	} else root = document.querySelector('#dm_content') || document.querySelector('main') || document.body;
 	const imgs = [], docs = [], embeds = [], forms = [], links = [], out = [];
 	const KEEP = new Set(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'td', 'th', 'blockquote', 'strong', 'b', 'em', 'i', 'br', 'hr', 'pre', 'code', 'sup', 'sub', 'figure', 'figcaption']);
 	const BLOCKISH = new Set(['div', 'section', 'article', 'aside', 'main', 'center', 'dl', 'dt', 'dd']);
@@ -252,7 +272,8 @@ function extractInPage() {
 			}
 			return;
 		}
-		if (el.matches(skip)) return;
+		if (el.matches(generic ? skipG : skip)) return;
+		if (generic && tag === 'header' && !el.querySelector('h1,h2')) return;
 		const cs = getComputedStyle(el);
 		if (cs.display === 'none' || el.hasAttribute('hidden')) return;
 
@@ -355,6 +376,10 @@ function extractInPage() {
 	let nav = null;
 	const navEl = document.querySelector('#unifiedNav ul, nav ul, [class*="dmNav"] ul, ul[class*="nav"]');
 	if (navEl) nav = navTree(navEl);
+	if (generic && (!nav || !nav.length)) {
+		const seenH = new Set();
+		nav = [...document.querySelectorAll('header a, nav a, [role=navigation] a, [role=banner] a')].map((a) => ({ text: (a.textContent || '').trim().replace(/\s+/g, ' '), href: abs(a.getAttribute('href') || ''), children: [] })).filter((n) => n.text && n.text.length < 40 && n.href && n.href.startsWith('http') && !seenH.has(n.href) && seenH.add(n.href)).slice(0, 40);
+	}
 
 	const cssOf = (sel, prop) => {
 		const e = document.querySelector(sel);
@@ -368,13 +393,29 @@ function extractInPage() {
 		h1_color: cssOf('#dm_content h1, h1', 'color'),
 		h2_color: cssOf('#dm_content h2, h2', 'color'),
 		link_color: cssOf('#dm_content a, a', 'color'),
-		button_bg: cssOf('.dmButtonLink, a[class*="button" i], .dmWidget a, button', 'backgroundColor'),
-		button_color: cssOf('.dmButtonLink, a[class*="button" i], .dmWidget a, button', 'color'),
-		header_bg: cssOf('#hcontainer, .dmHeaderContainer, header', 'backgroundColor'),
-		footer_bg: cssOf('.dmFooterContainer, footer', 'backgroundColor'),
+		button_bg: cssOf('.dmButtonLink, .wp-block-button__link, .elementor-button, a.button, a[class*="button" i], .btn, button[type=submit], .dmWidget a, button', 'backgroundColor'),
+		button_color: cssOf('.dmButtonLink, .wp-block-button__link, .elementor-button, a.button, a[class*="button" i], .btn, button[type=submit], .dmWidget a, button', 'color'),
+		header_bg: cssOf('#hcontainer, .dmHeaderContainer, header, [role=banner]', 'backgroundColor'),
+		footer_bg: cssOf('.dmFooterContainer, footer, [role=contentinfo]', 'backgroundColor'),
 	};
-	const footerText = (document.querySelector('.dmFooterContainer, footer')?.innerText || '').replace(/\n{3,}/g, '\n\n').trim().slice(0, 1500);
-	const headerLogo = document.querySelector('.dmHeaderContainer img, #hcontainer img, header img');
+	const footerText = (document.querySelector('.dmFooterContainer, footer, [role=contentinfo]')?.innerText || '').replace(/\n{3,}/g, '\n\n').trim().slice(0, 1500);
+	const headerLogo = (generic && document.querySelector('.custom-logo, .site-logo img, img[class*="logo" i], a[class*="logo" i] img, [class*="logo" i] img, header img, [role=banner] img')) || document.querySelector('.dmHeaderContainer img, #hcontainer img, header img');
+	// structured data, service times and address lines (work on any site)
+	const jsonld = [];
+	document.querySelectorAll('script[type="application/ld+json"]').forEach((sc) => {
+		try {
+			const j = JSON.parse(sc.textContent);
+			const nodes = Array.isArray(j) ? j : j['@graph'] || [j];
+			for (const n of nodes) {
+				const t = [].concat(n['@type'] || []).join(',');
+				if (/Church|PlaceOfWorship|Organization|LocalBusiness|Place|Website|WebSite/i.test(t)) jsonld.push({ type: t, name: n.name, url: n.url, telephone: n.telephone, email: n.email, address: n.address, openingHours: n.openingHours, sameAs: n.sameAs, logo: typeof n.logo === 'string' ? n.logo : n.logo?.url });
+			}
+		} catch {}
+	});
+	const bodyLines = (document.body.innerText || '').split(/\n+/).map((l) => l.trim()).filter(Boolean);
+	const timeLines = bodyLines.filter((l) => l.length < 170 && /\b(sun(day)?s?|sat(urday)?|wed(nesday)?|thu(rsday)?|fri(day)?|mon(day)?|tue(sday)?)\b/i.test(l) && /\b\d{1,2}(:\d{2})?\s?(a\.?m\.?|p\.?m\.?)/i.test(l)).slice(0, 8);
+	const addrLines = bodyLines.filter((l) => l.length < 200 && (/\b[ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTV-Z][ -]?\d[ABCEGHJ-NPRSTV-Z]\d\b/i.test(l) || /,\s*[A-Z]{2}\s+\d{5}\b/.test(l))).slice(0, 6);
+	const siteName = metaOf('og:site_name');
 	const metaC = (n) => document.querySelector(`meta[name="${n}"],meta[property="${n}"]`)?.getAttribute('content') || '';
 
 	return {
@@ -389,8 +430,9 @@ function extractInPage() {
 		canonical: document.querySelector('link[rel=canonical]')?.href || '',
 		lang: document.documentElement.lang || '',
 		passwordForm: Boolean(root.querySelector('input[type=password]')),
-		imgs, docs, embeds, forms, links, nav, design, footerText,
+		imgs, docs, embeds, forms, links, nav, design, footerText, jsonld: jsonld.slice(0, 6), timeLines, addrLines, siteName,
 		logo: headerLogo ? { url: bestImg(headerLogo), alt: headerLogo.getAttribute('alt') || '' } : null,
+		generator: metaOf('generator'),
 		editor: document.querySelector('#dmRoot, .dmRoot') ? 'legacy-advanced' : (document.querySelector('[data-flex-site], .flex-element') ? 'flex' : 'unknown'),
 	};
 }
@@ -427,10 +469,13 @@ function imageCandidates(u) {
 	return [...new Set(list)];
 }
 const EXT_BY_TYPE = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'image/svg+xml': 'svg', 'image/avif': 'avif', 'application/pdf': 'pdf' };
+let GENERIC = false;
+const JUNK_HOSTS = /(^|\.)(doubleclick\.net|google-analytics\.com|googletagmanager\.com|facebook\.com|facebook\.net|gravatar\.com|wp\.com|w\.org|gstatic\.com|googleapis\.com|youtube\.com|ytimg\.com|vimeo\.com|vimeocdn\.com|twitter\.com|instagram\.com|cdninstagram\.com|paypal\.com|paypalobjects\.com|stripe\.com|addtoany\.com|statcounter\.com)$/i;
 function wantAsset(u, siteHost) {
 	try {
 		const h = new URL(u).hostname;
 		const pth = new URL(u).pathname;
+		if (GENERIC && /^https?:$/.test(new URL(u).protocol) && !JUNK_HOSTS.test(h)) return true;
 		return h === siteHost || h.replace(/^www\./, '') === siteHost.replace(/^www\./, '') || (isDudaCdn(u) && (/\/dms3rep\//.test(u) || (/^(irp|lirp|irp-cdn|vid)\./i.test(h) && /^\/[a-z0-9]{8}\/[^/]+/i.test(pth))));
 	} catch {
 		return false;
@@ -440,7 +485,7 @@ function wantAsset(u, siteHost) {
 /* ------------------------------------------------------------------ main */
 const domain = String(opt.domain || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '');
 let siteName = opt.site && opt.site !== true ? String(opt.site) : null;
-const base = `https://${domain}`;
+const base = `${/^(127\.|localhost)/.test(domain) ? 'http' : 'https'}://${domain}`;
 const siteHost = domain;
 const stamp = domain.replace(/^www\./, '').replace(/[^a-z0-9]+/gi, '-');
 const outDir = path.resolve(String(opt.out), `${stamp}-duda-export`);
@@ -463,8 +508,29 @@ const addInv = (p, rec) => {
 	inv.set(k, { path: k, ...(inv.get(k) || {}), ...rec });
 };
 
+const detectPlatform = (h) => (/dmRoot|multiscreensite\.com|cdn-website\.com|dmFooterContainer|dudaone/i.test(h) ? 'duda'
+	: /static\.wixstatic\.com|wix-bolt|_wixCIDX|wixsite\.com/i.test(h) ? 'wix'
+	: /squarespace-cdn\.com|static1\.squarespace\.com|<!-- This is Squarespace/i.test(h) ? 'squarespace'
+	: /weebly\.com|editmysite\.com/i.test(h) ? 'weebly'
+	: /img1\.wsimg\.com|websitebuilder\.godaddy|secureserver\.net/i.test(h) ? 'godaddy'
+	: /wp-content\/|wp-includes\/|content="WordPress/i.test(h) ? 'wordpress'
+	: 'other');
+let homeHtml = '', platform = 'unknown';
+try {
+	const hh = await httpGet(`${base}/`);
+	homeHtml = hh.body || '';
+	platform = detectPlatform(homeHtml);
+} catch (e) {
+	flag('warn', '/', 'could not fetch the home page', e.message);
+}
+GENERIC = MODE === 'generic' || (MODE === 'auto' && platform !== 'duda');
+const PLATFORM_LABEL = { duda: 'DUDA', wix: 'Wix', squarespace: 'Squarespace', weebly: 'Weebly', godaddy: 'GoDaddy', wordpress: 'WordPress', other: 'custom/other', unknown: 'unknown' }[platform] || platform;
+log(`  site type: ${PLATFORM_LABEL}${GENERIC ? ' (generic extraction)' : ' (DUDA extraction)'}${PREVIEW ? ', preview mode' : ''}`);
+const junkPath = (p) => /\.(?:jpe?g|png|gif|webp|svg|pdf|docx?|xlsx?|pptx?|zip|mp[34]|mov|xml|json|css|js|ico)$/i.test(p) || /^\/(?:wp-json|wp-admin|wp-login|wp-content|wp-includes|feed|xmlrpc|cart|checkout|my-account|search|tag|category|author|attachment|page\/\d+|comments)(?:\/|$)/i.test(p) || /\/feed\/?$/i.test(p) || /\/(?:attachment|amp)\/?$/i.test(p);
+
 let contentLibrary = null, blogMeta = [], collections = null, siteDetails = null, apiNote = '';
-if (hasApi) {
+if (hasApi && GENERIC) flag('info', 'api', 'DUDA account access skipped', 'this is not a DUDA site');
+if (hasApi && !GENERIC) {
 	try {
 		if (!siteName && (opt['find-site'] || hasMcp)) siteName = await findSiteByDomain(domain);
 		if (siteName) {
@@ -490,22 +556,44 @@ if (hasApi) {
 }
 
 // sitemap (works with or without the API)
+const addUrl = (u, rec) => {
+	if (GENERIC && junkPath(normPath(u))) return;
+	if (/^https?:\/\//i.test(u) && !new RegExp(`^https?://(www\\.)?${domain.replace(/^www\./, '').replace(/[.:]/g, (c) => '\\' + c)}(/|$)`, 'i').test(u)) return;
+	addInv(u, rec);
+};
 try {
-	const sm = await httpGet(`${base}/sitemap.xml`);
+	let sm = await httpGet(`${base}/sitemap.xml`);
+	if (!sm.ok && GENERIC) for (const alt of ['/wp-sitemap.xml', '/sitemap_index.xml']) if (!sm.ok) sm = await httpGet(`${base}${alt}`);
 	if (sm.ok) {
 		const locs = [...sm.body.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1].trim());
 		let nested = 0;
 		for (const loc of locs) {
 			if (/\.xml(\?|$)/i.test(loc)) {
+				if (nested++ >= 12) continue;
 				const sub = await httpGet(loc);
-				if (sub.ok) for (const m of sub.body.matchAll(/<loc>([^<]+)<\/loc>/g)) addInv(m[1], { inSitemap: true });
-				nested++;
-			} else addInv(loc, { inSitemap: true });
+				if (sub.ok) for (const m of sub.body.matchAll(/<loc>([^<]+)<\/loc>/g)) addUrl(m[1], { inSitemap: true });
+			} else addUrl(loc, { inSitemap: true });
 		}
-		for (const m of sm.body.matchAll(/<loc>([^<]+)<\/loc>[\s\S]*?<lastmod>([^<]+)<\/lastmod>/g)) addInv(m[1], { lastmod: m[2] });
-	} else flag('warn', 'sitemap', `sitemap.xml returned HTTP ${sm.status}`, 'Only API pages (if enabled) and the home page will be crawled.');
+		for (const m of sm.body.matchAll(/<loc>([^<]+)<\/loc>[\s\S]*?<lastmod>([^<]+)<\/lastmod>/g)) if (!GENERIC || !junkPath(normPath(m[1]))) addInv(m[1], { lastmod: m[2] });
+	} else flag('warn', 'sitemap', `sitemap.xml returned HTTP ${sm.status}`, 'Only API pages (if enabled), pages linked from the home page and the home page will be crawled.');
 } catch (e) {
 	flag('warn', 'sitemap', 'sitemap fetch failed', e.message);
+}
+// generic sites: also take the pages linked from the home page (menus), which are the pages that matter most
+if (GENERIC && homeHtml) {
+	const navBlocks = [...homeHtml.matchAll(/<(?:nav|header)\b[\s\S]*?<\/(?:nav|header)>/gi)].map((m) => m[0]).join('\n') || homeHtml;
+	let added = 0;
+	for (const m of navBlocks.matchAll(/<a\b[^>]*?href=["']([^"'#]+)["'][^>]*>/gi)) {
+		let h = m[1].trim().replace(/&amp;/g, '&');
+		if (/^(mailto|tel|javascript):/i.test(h)) continue;
+		try {
+			const u = new URL(h, base + '/');
+			if (u.host.replace(/^www\./, '') !== domain.replace(/^www\./, '') || u.search) continue;
+			if (junkPath(normPath(u.pathname)) || added >= 60) continue;
+			addInv(u.pathname, { fromNav: true });
+			added++;
+		} catch {}
+	}
 }
 if (!inv.has('/')) addInv('/', { kind: 'page', inSitemap: false });
 if (inv.get('/')) inv.get('/').kind ||= 'page';
@@ -516,7 +604,12 @@ if (opt.only && opt.only !== true) {
 	const want = new Set(String(opt.only).split(',').map((x) => normPath(x.trim())));
 	queue = queue.filter((q) => want.has(q.path));
 }
-if (Number(opt['max-pages']) > 0) queue = queue.slice(0, Number(opt['max-pages']));
+if (PREVIEW) {
+	const W = [[/about|who-we-are|our-story|history|beliefs|vision|welcome|identity/i, 3], [/worship|service|times|sunday|schedule|join-us/i, 3], [/visit|new-here|plan|location|direction|find-us|contact/i, 3], [/ministr|children|youth|kids|famil|music|choir|outreach|mission|program|get-involved|connect|community/i, 2], [/staff|pastor|leader|minister|team|clergy/i, 2], [/news|blog|event|calendar|archive|sermon|bulletin|newsletter|\b(19|20)\d{2}\b|privacy|terms|login|donate-now/i, -3]];
+	const sc = (r) => W.reduce((n, [re, w]) => n + (re.test(r.path) ? w : 0), 0) + (r.fromNav ? 1 : 0);
+	const keep = Number(opt['max-pages']) > 0 ? Number(opt['max-pages']) : 6;
+	queue = [...queue.filter((q) => q.path === '/'), ...queue.filter((q) => q.path !== '/' && sc(q) > 0).sort((a, b) => sc(b) - sc(a) || a.path.localeCompare(b.path))].slice(0, keep);
+} else if (Number(opt['max-pages']) > 0) queue = queue.slice(0, Number(opt['max-pages']));
 log(`  pages to crawl: ${queue.length} (${queue.filter((q) => q.kind === 'blog').length} blog posts from API)`);
 
 /* 2. crawl -------------------------------------------------------- */
@@ -553,11 +646,11 @@ await pool(queue, Number(opt.concurrency), async (rec) => {
 		}
 		await autoScroll(page).catch(() => {});
 		await page.waitForTimeout(500);
-		let x = await page.evaluate(extractInPage);
+		let x = await page.evaluate(extractInPage, GENERIC);
 		for (let retry = 0; retry < 2 && (x.text.match(/\S+/g) || []).length < 25 && !x.passwordForm; retry++) {
 			await page.waitForTimeout(3000);
 			await autoScroll(page).catch(() => {});
-			const y = await page.evaluate(extractInPage);
+			const y = await page.evaluate(extractInPage, GENERIC);
 			if (y.text.length > x.text.length) x = y;
 		}
 		results.push({ rec, status, finalUrl: page.url(), ...x });
@@ -628,7 +721,7 @@ async function fetchAsset(source, kind, pageSlug, idx, maxMb) {
 const pageSlugs = new Map();
 const usedSlugs = new Set();
 for (const r of results) {
-	const seg = r.rec.path === '/' ? 'home' : r.rec.path.split('/').filter(Boolean).pop();
+	const seg = r.rec.path === '/' ? 'home' : lastSeg(r.rec.path);
 	let s = slugify(seg);
 	for (let n = 2; usedSlugs.has(s); n++) s = `${slugify(seg)}-${n}`;
 	usedSlugs.add(s);
@@ -654,7 +747,7 @@ if (!opt['skip-images']) {
 			}
 			jobs.push({ r, kind: 'image', url: im.url, idx: ++i, alt: im.alt });
 		}
-		for (const d of r.docs || []) if (wantAsset(d.url, siteHost) || isDudaCdn(d.url)) jobs.push({ r, kind: 'doc', url: d.url, idx: 0, text: d.text });
+		if (!SKIP_DOCS) for (const d of r.docs || []) if (wantAsset(d.url, siteHost) || isDudaCdn(d.url)) jobs.push({ r, kind: 'doc', url: d.url, idx: 0, text: d.text });
 		if (r.rec.path === '/' && r.logo?.url && wantAsset(r.logo.url, siteHost)) jobs.push({ r, kind: 'image', url: r.logo.url, idx: 0, alt: r.logo.alt, logo: true });
 		const fi = r.rec.blog?.main_image?.url || r.rec.blog?.thumbnail?.url;
 		if (fi && wantAsset(fi, siteHost)) jobs.push({ r, kind: 'image', url: fi, idx: 0, alt: r.rec.blog?.thumbnail?.alt_text || '', featured: true });
@@ -672,6 +765,75 @@ if (!opt['skip-images']) {
 	});
 }
 const resolveAsset = (r, u) => r.assets?.[u] || byFinal.get('image|' + u) || byFinal.get('document|' + u) || null;
+
+/* 3b. brand colours (from the logo image and the site's CSS) ----------- */
+const toHexC = (c) => {
+	const m = String(c || '').match(/rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)(?:[,\s/]+([\d.]+))?/i);
+	if (!m || (m[4] !== undefined && Number(m[4]) === 0)) return null;
+	return '#' + [m[1], m[2], m[3]].map((v) => Number(v).toString(16).padStart(2, '0')).join('').toUpperCase();
+};
+const sat = (h) => { const v = [1, 3, 5].map((i) => parseInt(h.substr(i, 2), 16)); return Math.max(...v) - Math.min(...v); };
+const dist = (a, b) => { const x = [1, 3, 5].map((i) => parseInt(a.substr(i, 2), 16)), y = [1, 3, 5].map((i) => parseInt(b.substr(i, 2), 16)); return Math.hypot(x[0] - y[0], x[1] - y[1], x[2] - y[2]); };
+let brand = { logo_file: '', logo_colours: [], css_colours: {}, suggested: { primary: '', accent: '' }, fonts: {} };
+try {
+	const home = results.find((r) => r.rec && r.rec.path === '/');
+	const lg = home && home.logo && home.logo.url ? resolveAsset(home, home.logo.url) : null;
+	if (lg) brand.logo_file = lg.file;
+	if (lg && fs.existsSync(path.join(outDir, lg.file))) {
+		const buf = fs.readFileSync(path.join(outDir, lg.file));
+		const ext = path.extname(lg.file).slice(1).toLowerCase();
+		const mime = ext === 'svg' ? 'image/svg+xml' : ext === 'jpg' ? 'image/jpeg' : `image/${ext}`;
+		const b2 = await chromium.launch({ ...(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}), ...(opt.channel && opt.channel !== true ? { channel: String(opt.channel) } : {}) });
+		try {
+			const pg = await b2.newPage();
+			brand.logo_colours = await pg.evaluate(async (url) => {
+				const img = new Image();
+				img.src = url;
+				await img.decode();
+				const w0 = img.naturalWidth || 200, h0 = img.naturalHeight || 100, k = Math.min(1, 120 / Math.max(w0, h0));
+				const c = document.createElement('canvas');
+				c.width = Math.max(8, Math.round(w0 * k));
+				c.height = Math.max(8, Math.round(h0 * k));
+				const x = c.getContext('2d');
+				x.drawImage(img, 0, 0, c.width, c.height);
+				const d = x.getImageData(0, 0, c.width, c.height).data;
+				const bk = new Map();
+				for (let i = 0; i < d.length; i += 4) {
+					const [r, g, b, a] = [d[i], d[i + 1], d[i + 2], d[i + 3]];
+					if (a < 128) continue;
+					const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+					if (mn > 232 || mx < 45 || mx - mn < 30) continue;
+					const key = (r >> 4) + ',' + (g >> 4) + ',' + (b >> 4);
+					const e = bk.get(key) || { n: 0, r: 0, g: 0, b: 0 };
+					e.n++; e.r += r; e.g += g; e.b += b;
+					bk.set(key, e);
+				}
+				return [...bk.values()].sort((p, q) => q.n - p.n).slice(0, 8).map((e) => ({ hex: '#' + [e.r, e.g, e.b].map((v) => Math.round(v / e.n).toString(16).padStart(2, '0')).join('').toUpperCase(), n: e.n }));
+			}, `data:${mime};base64,${buf.toString('base64')}`);
+		} catch (e) {
+			flag('info', 'brand', 'could not read logo colours', String(e.message || e).split('\n')[0]);
+		} finally {
+			await b2.close();
+		}
+		const out = [];
+		for (const c of brand.logo_colours) if (!out.some((o) => dist(o.hex, c.hex) < 70)) out.push(c);
+		brand.logo_colours = out.slice(0, 4);
+	}
+	if (design) {
+		for (const [k, v] of Object.entries({ button: design.button_bg, link: design.link_color, heading: design.h1_color, heading2: design.h2_color, header: design.header_bg, footer: design.footer_bg })) {
+			const h = toHexC(v);
+			if (h) brand.css_colours[k] = h;
+		}
+		brand.fonts = { body: design.body_font || '', heading: design.h1_font || '' };
+	}
+	const cand = [...brand.logo_colours.map((c) => c.hex), ...['button', 'link', 'heading', 'heading2', 'header', 'footer'].map((k) => brand.css_colours[k]).filter((h) => h && sat(h) >= 30)];
+	const uniq = [];
+	for (const h of cand) if (!uniq.some((u) => dist(u, h) < 70)) uniq.push(h);
+	brand.suggested = { primary: uniq[0] || '', accent: uniq[1] || '' };
+	fs.writeFileSync(path.join(outDir, 'data/brand.json'), JSON.stringify(brand, null, 2));
+} catch (e) {
+	flag('info', 'brand', 'brand colour step failed', String(e.message || e).split('\n')[0]);
+}
 
 /* 4. markdown ------------------------------------------------------ */
 const td = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-', codeBlockStyle: 'fenced', emDelimiter: '*', strongDelimiter: '**', linkStyle: 'inlined' });
@@ -696,8 +858,11 @@ const md = (html, r) => {
 	return svc.turndown(rewritten).replace(/\[([\s|·•\-–—,;:/]+)\]\([^)]*\)/g, '$1').replace(/[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
 };
 
-const emailsSeen = new Map(), phonesSeen = new Map();
+const emailsSeen = new Map(), phonesSeen = new Map(), timesSeen = new Map(), addrSeen = new Map(), ldSeen = [];
 const noteContacts = (r) => {
+	for (const l of r.timeLines || []) (timesSeen.get(l) || timesSeen.set(l, new Set()).get(l)).add(r.rec.path);
+	for (const l of r.addrLines || []) (addrSeen.get(l) || addrSeen.set(l, new Set()).get(l)).add(r.rec.path);
+	for (const j of r.jsonld || []) if (ldSeen.length < 8 && !ldSeen.some((x) => JSON.stringify(x) === JSON.stringify(j))) ldSeen.push(j);
 	const t = (r.text || '') + ' ' + (r.links || []).join(' ');
 	for (const m of t.matchAll(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g)) {
 		const e = m[0].toLowerCase().replace(/^mailto:/, '');
@@ -721,6 +886,29 @@ const suggest = (rec, title, words, r) => {
 	return ['migrate', ''];
 };
 const pagesOut = [];
+const boiler = new Set();
+if (GENERIC) {
+	const okPages = results.filter((r) => r.html && !r.error && r.status < 400);
+	if (okPages.length >= 3) {
+		const counts = new Map();
+		for (const r of okPages) {
+			const seen = new Set();
+			for (const b of md(r.html, r).split(/\n{2,}/)) {
+				const k = b.replace(/\s+/g, ' ').trim();
+				if (k.length >= 8 && !seen.has(k)) {
+					seen.add(k);
+					counts.set(k, (counts.get(k) || 0) + 1);
+				}
+			}
+		}
+		const need = Math.max(3, Math.ceil(okPages.length * 0.6));
+		for (const [k, n] of counts) if (n >= need && !/^#{1,6}\s/.test(k)) boiler.add(k);
+		if (boiler.size) {
+			flag('info', 'all pages', `${boiler.size} repeated block(s) removed (menus, footers, banners)`, [...boiler].slice(0, 5).map((b) => b.slice(0, 70)).join(' | '));
+			fs.writeFileSync(path.join(outDir, 'data/boilerplate-removed.md'), [...boiler].map((b) => b + '\n').join('\n---\n\n'));
+		}
+	}
+}
 for (const r of results) {
 	const rec = r.rec;
 	if (r.error || !r.html) {
@@ -734,9 +922,15 @@ for (const r of results) {
 	}
 	if (r.passwordForm) flag('warn', rec.path, 'password-protected or contains a password field', 'content may be incomplete');
 	noteContacts(r);
-	const human = (rec.path === '/' ? 'Home' : decodeURIComponent(rec.path.split('/').filter(Boolean).pop()).replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
-	const title = (rec.title || r.pageTitle || navTitles.get(rec.path) || r.h1 || human).trim();
+	const human = (rec.path === '/' ? 'Home' : lastSeg(rec.path).replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
+	const docTitleParts = GENERIC ? String(r.title || '').split(/\s+[|\u2013\u2014\u00b7\u00bb-]\s+|\s*[|\u00bb]\s*/).map((x) => x.trim()).filter(Boolean) : [];
+	const siteNm = (r.siteName || '').toLowerCase();
+	const homeParts = (results.find((x) => x.rec && x.rec.path === '/')?.title || '').split(/\s+[|\u2013\u2014\u00b7\u00bb-]\s+|\s*[|\u00bb]\s*/).map((x) => x.trim().toLowerCase());
+	const homeTitleRaw = results.find((x) => x.rec && x.rec.path === '/')?.title || '';
+	const fromDocTitle = (rec.path !== '/' && r.title === homeTitleRaw) ? '' : docTitleParts.filter((x) => x.toLowerCase() !== siteNm && !(rec.path !== '/' && docTitleParts.length > 1 && homeParts.includes(x.toLowerCase()) && x.toLowerCase() === homeParts[homeParts.length - 1]))[0] || '';
+	const title = (rec.title || r.pageTitle || navTitles.get(rec.path) || (GENERIC && r.h1 && r.h1.length < 90 ? r.h1 : '') || (GENERIC && rec.path !== '/' ? fromDocTitle : '') || r.h1 || human).trim();
 	let body = md(r.html, r);
+	if (boiler.size) body = body.split(/\n{2,}/).filter((b) => !boiler.has(b.replace(/\s+/g, ' ').trim())).join('\n\n');
 	const firstLine = body.split('\n').find((l) => l.trim()) || '';
 	if (!/^#\s/.test(firstLine) || firstLine.replace(/^#\s+/, '').trim().toLowerCase() !== title.toLowerCase()) {
 		if (/^#\s/.test(firstLine)) body = body.replace(/^#\s+(.*)$/m, (m0, t) => (t.trim().toLowerCase() === title.toLowerCase() ? m0 : `# ${title}\n\n## ${t}`));
@@ -752,7 +946,7 @@ for (const r of results) {
 	const docs = [...new Set((r.docs || []).map((d) => resolveAsset(r, d.url)).filter(Boolean))].map((a) => ({ file: a.file, text: a.docText || '' }));
 	const slug = r.slug;
 	const isBlog = rec.kind === 'blog';
-	const newPath = rec.path === '/' ? '/' : `/${slugify(rec.path.split('/').filter(Boolean).pop())}/`;
+	const newPath = rec.path === '/' ? '/' : `/${slugify(lastSeg(rec.path))}/`;
 	if (rec.path !== '/' && rec.path !== newPath.replace(/\/$/, '') && rec.path + '/' !== newPath) redirects.push([rec.path, newPath, 'slug changes (case/punctuation)']);
 	const fm = [
 		'---',
@@ -760,7 +954,7 @@ for (const r of results) {
 		`type: ${isBlog ? 'blog-post' : 'page'}`,
 		`old_url: ${yq(base + (rec.path === '/' ? '/' : rec.path))}`,
 		`old_path: ${yq(rec.path)}`,
-		`suggested_slug: ${yq(rec.path === '/' ? 'home' : slugify(rec.path.split('/').filter(Boolean).pop()))}`,
+		`suggested_slug: ${yq(rec.path === '/' ? 'home' : slugify(lastSeg(rec.path)))}`,
 		`suggested_action: ${action}${why ? ` # ${why}` : ''}`,
 		`meta_description: ${yq(r.description || rec.blog?.description || '')}`,
 		`noindex: ${Boolean(rec.noindex || /noindex/i.test(r.robots))}`,
@@ -821,7 +1015,7 @@ pagesOut.forEach((p) => (counts[p.action] = (counts[p.action] || 0) + 1));
 const imgCount = mediaMap.filter((m) => m.kind === 'image').length, docCount = mediaMap.filter((m) => m.kind === 'document').length;
 const brief = `# Site brief: ${domain}
 
-Exported ${new Date().toISOString().slice(0, 10)} from the live DUDA site by duda-export. ${apiNote ? apiNote + '. ' : 'No API credentials were used (public pages and sitemap only). '}Editor type detected: ${siteDetails?.editor || editor}.
+Exported ${new Date().toISOString().slice(0, 10)} from the live ${PLATFORM_LABEL} site by duda-export${GENERIC ? ' (generic extraction' + (PREVIEW ? ', preview of key pages only' : '') + ')' : ''}. ${GENERIC ? '' : (apiNote ? apiNote + '. ' : 'No API credentials were used (public pages and sitemap only). ') + 'Editor type detected: ' + (siteDetails?.editor || editor) + '.'}
 
 ## At a glance
 - Pages exported: ${pagesOut.filter((p) => p.kind !== 'blog').length}; blog posts: ${pagesOut.filter((p) => p.kind === 'blog').length}; images: ${imgCount}; documents: ${docCount}
@@ -829,7 +1023,7 @@ Exported ${new Date().toISOString().slice(0, 10)} from the live DUDA site by dud
 - Flags needing attention: ${flags.filter((f) => f.severity !== 'info').length + failedMedia.filter((f) => !f.info).length} (see data/flags.csv)
 
 ## Contact details found
-${contentLibrary ? '' : '(No API credentials, so the DUDA content library is not included; use the footer text and the numbers seen below.)\n'}${cl.address_geolocation ? `- Address (DUDA content library): ${cl.address_geolocation}\n` : ''}${(cl.phones || []).map((p) => `- Phone (content library): ${p.phoneNumber}`).join('\n')}
+${contentLibrary || GENERIC ? '' : '(No API credentials, so the DUDA content library is not included; use the footer text and the numbers seen below.)\n'}${cl.address_geolocation ? `- Address (DUDA content library): ${cl.address_geolocation}\n` : ''}${(cl.phones || []).map((p) => `- Phone (content library): ${p.phoneNumber}`).join('\n')}
 ${(cl.emails || []).map((e) => `- Email (content library): ${e.emailAddress}`).join('\n')}
 
 Phone numbers seen in page text (pages that contain them):
@@ -838,6 +1032,12 @@ ${phoneRows.map(([p, s]) => `- ${p} (${s.size} page${s.size > 1 ? 's' : ''})`).j
 Email addresses seen on pages (confirm which are public before publishing):
 ${emailRows.map(([e, s]) => `- ${e} (${s.size} page${s.size > 1 ? 's' : ''})`).join('\n') || '- none'}
 
+Service times seen on the pages (check them against the church before publishing):
+${[...timesSeen.entries()].slice(0, 10).map(([l, s]) => `- ${l} (${[...s].slice(0, 2).join(', ')})`).join('\n') || '- none found'}
+
+Address lines seen:
+${[...addrSeen.entries()].slice(0, 6).map(([l, s]) => `- ${l} (${s.size} page${s.size > 1 ? 's' : ''})`).join('\n') || '- none found'}
+${ldSeen.length ? '\nStructured data on the site (schema.org):\n```json\n' + JSON.stringify(ldSeen, null, 1).slice(0, 2500) + '\n```\n' : ''}
 Footer text on the old site:
 \`\`\`
 ${footerText || '(none found)'}
@@ -850,6 +1050,11 @@ ${navLines(navTree).join('\n') || '(not detected)'}
 ${design ? Object.entries(design).map(([k, v]) => `- ${k}: ${v}`).join('\n') : '(not captured)'}
 ${logo?.url ? `- Logo: ${(resolveAsset(results[0] || {}, logo.url) || {}).file || logo.url}` : ''}
 
+## Brand colours observed
+${brand.logo_colours.length ? `- Logo (${brand.logo_file}): ${brand.logo_colours.map((c) => c.hex).join(', ')}` : '- Logo colours: not available'}
+${Object.entries(brand.css_colours).map(([k, v]) => `- ${k} colour on the site: ${v}`).join('\n')}
+- **Suggested for the new design:** primary ${brand.suggested.primary || '(none found)'}, accent ${brand.suggested.accent || '(none found)'} (use these as the custom colours when choosing a design; data/brand.json has the detail)
+
 ## Page inventory
 | # | Old path | Title | Words | Images | Docs | Suggested | Notes |
 |---|----------|-------|------:|-------:|-----:|-----------|-------|
@@ -859,13 +1064,26 @@ ${pagesOut.map((p, i) => `| ${i + 1} | ${p.path} | ${p.title.replace(/\|/g, '/')
 ${[...flags.filter((f) => f.severity !== 'info').slice(0, 60).map((f) => `- [${f.severity}] ${f.where}: ${f.issue}${f.detail ? ' (' + f.detail + ')' : ''}`), ...failedMedia.filter((f) => !f.info).slice(0, 20).map((f) => `- [warn] media: ${f.source} (${f.reason})`)].join('\n') || '- nothing flagged'}
 
 ## Notes on how this was extracted
-- Text comes straight from the rendered page (no AI paraphrasing), but old DUDA pages often style text instead of using real headings, so "headings" may appear as bold text. Rebuild structure with judgement.
-- Images are named \`<page>-<nn>-<original name>\`. DUDA alt text is usually empty: write real alt text when placing images.
+${GENERIC ? '- Generic extraction: the main content area of each page was detected automatically; menus, sidebars, footers and cookie banners are left out, so check each page against the live site. Text comes straight from the rendered page (no AI paraphrasing).' : '- Text comes straight from the rendered page (no AI paraphrasing), but old DUDA pages often style text instead of using real headings, so "headings" may appear as bold text. Rebuild structure with judgement.'}
+- Images are named \`<page>-<nn>-<original name>\`. Alt text on old sites is usually missing: write real alt text when placing images. Do not reuse photos of identifiable people (members, children) in a prospect preview.
 - Pages marked "archive" or "delete" are still exported so nothing is lost; do not rebuild them without confirming with the church.
 `;
 fs.writeFileSync(path.join(outDir, 'site-brief.md'), brief);
 
-fs.writeFileSync(path.join(outDir, 'assistant-prompts.md'), `# Using this package with the ChurchWeb AI Assistant
+const previewPrompts = PREVIEW ? `# Prospect preview (read this first)
+
+This package holds the home page and a few key pages of an existing church site, for building a **preview** the church can look at. Keep it private: password-protect the site and set it to noindex, and tell the church the preview was built from their public website. Leave out photos of identifiable people (members, children) and use neutral images instead.
+
+## Preview prompt 1: design
+> Read the attached site brief and data/brand.json. Pick the design family that best fits this church (describe why in one sentence) and show me 3 candidate designs from the design list with the brand colours suggested in the brief as the custom colours. Do not build yet.
+
+## Preview prompt 2: build
+> Apply the design I chose, then build these pages as drafts using the content in the attached files: Home, plus each page I attach. Use the church name, address, service times and contact details from the brief. Use only images from the media library that do not show identifiable people; otherwise leave a clear placeholder. Show me the home page first.
+
+---
+
+` : '';
+fs.writeFileSync(path.join(outDir, 'assistant-prompts.md'), previewPrompts + `# Using this package with the ChurchWeb AI Assistant
 
 ## Before you start (one-time, about 5 minutes)
 1. In the new WordPress site go to **Media -> Add New** and drag in everything from the \`images/\` and \`documents/\` folders. File names become the media titles, so the assistant can find each picture by name.
@@ -894,9 +1112,9 @@ Answer its questions, then continue.
 Tips: work one section at a time (about, worship, ministries...). Never rebuild pages marked archive or delete without asking the church first. Pages with \`[EMBED: ...]\`, \`[FORM ...]\` markers need those widgets recreated: ask the assistant what it can do and what must be set up by hand.
 `);
 
-fs.writeFileSync(path.join(outDir, 'README.md'), `# ${domain}: DUDA export
+fs.writeFileSync(path.join(outDir, 'README.md'), `# ${domain}: ${GENERIC ? 'website' : 'DUDA'} export
 
-Generated by duda-export. Start with **site-brief.md** and **assistant-prompts.md**.
+Generated by duda-export (${PLATFORM_LABEL}${GENERIC ? ', generic mode' : ''}). Start with **site-brief.md** and **assistant-prompts.md**.
 
 - \`pages/\` one Markdown file per page (front matter has old URL, suggested slug, images, documents)
 - \`blog/\` one file per blog post (original date, author, tags, featured image)

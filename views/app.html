@@ -8,8 +8,12 @@
     <h2>New export</h2>
     <form id="f">
       <div class="row">
-        <div><label for="domain">Live domain of the DUDA site</label><input id="domain" type="text" placeholder="www.examplechurch.org" required autocomplete="off"></div>
+        <div><label for="domain">Live domain of the church website</label><input id="domain" type="text" placeholder="www.examplechurch.org" required autocomplete="off"></div>
         <div><label for="maxPages">Max pages (optional)</label><input id="maxPages" type="number" min="0" placeholder="all"></div>
+      </div>
+      <div class="row">
+        <div><label for="mode">Website type</label><select id="mode"><option value="auto" selected>Detect automatically</option><option value="duda">DUDA</option><option value="generic">Any other website (WordPress, Wix, Squarespace, custom)</option></select></div>
+        <div><label class="inline" style="margin-top:28px"><input id="preview" type="checkbox"> Preview only: home + key pages (about, worship, contact...), no documents</label></div>
       </div>
       <div id="apiBox" hidden>
         <label class="inline"><input id="useApi" type="checkbox" checked> Use DUDA account access (adds draft pages, content library, blog authors and dates)</label>

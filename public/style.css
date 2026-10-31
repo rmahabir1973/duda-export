@@ -10,8 +10,8 @@ main { max-width: 1000px; margin: 24px auto; padding: 0 16px; }
 h2 { margin: 0 0 12px; font-size: 16px; color: var(--p); }
 label { display: block; font-weight: 600; margin: 10px 0 4px; }
 label.inline { font-weight: 400; display: flex; gap: 8px; align-items: center; margin: 8px 0; }
-input[type=text], input[type=password], input[type=number] { width: 100%; padding: 9px 11px; border: 1px solid #cfd4da; border-radius: 7px; font: inherit; }
-input:focus { outline: 2px solid var(--p); outline-offset: -1px; border-color: transparent; }
+input[type=text], input[type=password], input[type=number], select { width: 100%; padding: 9px 11px; border: 1px solid #cfd4da; border-radius: 7px; font: inherit; }
+input:focus, select:focus { outline: 2px solid var(--p); outline-offset: -1px; border-color: transparent; }
 .row { display: grid; grid-template-columns: 2fr 1fr; gap: 14px; }
 button.primary { background: var(--p); color: #fff; border: 0; border-radius: 7px; padding: 10px 18px; font: inherit; font-weight: 600; cursor: pointer; margin-top: 12px; }
 button.primary:disabled { opacity: .5; cursor: default; }
