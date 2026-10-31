@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DUDA Export · ChurchWeb Global</title><meta name="robots" content="noindex,nofollow"><link rel="stylesheet" href="/assets/style.css"></head>
+<body>
+<header><h1>DUDA Export <small>ChurchWeb Global</small></h1><button id="logout">Sign out</button></header>
+<main>
+  <section class="card">
+    <h2>New export</h2>
+    <form id="f">
+      <div class="row">
+        <div><label for="domain">Live domain of the DUDA site</label><input id="domain" type="text" placeholder="www.examplechurch.org" required autocomplete="off"></div>
+        <div><label for="maxPages">Max pages (optional)</label><input id="maxPages" type="number" min="0" placeholder="all"></div>
+      </div>
+      <div id="apiBox" hidden>
+        <label class="inline"><input id="useApi" type="checkbox" checked> Use the DUDA API (adds draft pages, content library, blog authors and dates)</label>
+        <div id="siteBox"><label for="site">DUDA site name (optional)</label><input id="site" type="text" placeholder="leave empty to look it up from the domain" autocomplete="off"></div>
+      </div>
+      <p class="hint" id="noApi" hidden>The DUDA API is not configured on this server: only public pages and the sitemap are used.</p>
+      <label class="inline"><input id="skipImages" type="checkbox"> Skip images and documents (faster test)</label>
+      <button class="primary" id="go" type="submit">Start export</button>
+      <p class="err" id="err" role="alert"></p>
+      <p class="hint">A full church site takes about 4 to 8 minutes. Exports are kept <span id="ret">48</span> hours, then deleted automatically.</p>
+    </form>
+  </section>
+  <section class="card">
+    <h2>Exports</h2>
+    <table><thead><tr><th>Site</th><th>Status</th><th>Result</th><th></th></tr></thead><tbody id="rows"><tr><td colspan="4" class="small">Loading…</td></tr></tbody></table>
+    <div id="logWrap" hidden><div class="small" id="logTitle"></div><pre class="log" id="log"></pre></div>
+  </section>
+</main>
+<script src="/assets/app.js"></script>
+</body></html>
