@@ -1,3 +1,4 @@
+import { parseBatch, MAX_BATCH, slug, csvCell } from './batch.mjs';
 import express from 'express';
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
@@ -25,7 +26,7 @@ if (API_TOKEN && API_TOKEN.length < 24) {
 const SESSION_SECRET = env.SESSION_SECRET || crypto.createHash('sha256').update('cw-session:' + APP_PASSWORD).digest('hex');
 const DATA_DIR = path.resolve(env.DATA_DIR || path.join(__dirname, 'data'));
 const MAX_CONCURRENT = Math.max(1, Number(env.MAX_CONCURRENT_JOBS || 1));
-const MAX_QUEUE = Number(env.MAX_QUEUE || 10);
+const MAX_QUEUE = Number(env.MAX_QUEUE || 40);
 const MAX_PAGES_CAP = Number(env.MAX_PAGES_CAP || 500);
 const RETENTION_MS = Number(env.RETENTION_HOURS || 48) * 3600 * 1000;
 const JOB_TIMEOUT_MS = Number(env.JOB_TIMEOUT_MIN || 45) * 60 * 1000;
@@ -79,7 +80,7 @@ async function validateDomain(raw) {
 /* ---------------------------------------------------------------- jobs */
 const jobs = new Map();
 const jobDir = (id) => path.join(DATA_DIR, 'jobs', id);
-const publicJob = (j) => ({ id: j.id, domain: j.domain, site: j.site || '', useApi: j.useApi, status: j.status, created: j.created, started: j.started, ended: j.ended, summary: j.summary, error: j.error, by: j.by, opts: j.opts });
+const publicJob = (j) => ({ id: j.id, label: j.label || '', domain: j.domain, site: j.site || '', useApi: j.useApi, status: j.status, created: j.created, started: j.started, ended: j.ended, summary: j.summary, error: j.error, by: j.by, opts: j.opts });
 function persist(j) {
 	try {
 		fs.writeFileSync(path.join(jobDir(j.id), 'job.json'), JSON.stringify({ ...publicJob(j), zip: j.zip }, null, 2));
@@ -293,29 +294,70 @@ app.get('/api/jobs/:id', need, (req, res) => {
 	if (!j) return res.status(404).json({ error: 'Not found' });
 	res.json({ ...publicJob(j), log: j.log.slice(-200) });
 });
+async function enqueue(b, by) {
+	if (queue.length + running.size >= MAX_QUEUE) {
+		const e = new Error('The queue is full. Wait for some jobs to finish.');
+		e.status = 429;
+		throw e;
+	}
+	const domain = await validateDomain(b.domain);
+	const site = b.site ? String(b.site).trim() : '';
+	if (site && !/^[A-Za-z0-9_-]{3,40}$/.test(site)) throw new Error('Site name looks wrong (letters and numbers only)');
+	const useApi = Boolean(b.useApi) && API_AVAILABLE;
+	const maxPages = Math.min(MAX_PAGES_CAP, Math.max(0, parseInt(b.maxPages, 10) || 0));
+	const id = crypto.randomBytes(8).toString('hex');
+	fs.mkdirSync(jobDir(id), { recursive: true });
+	const mode = ['auto', 'duda', 'generic'].includes(b.mode) ? b.mode : 'auto';
+	const preview = Boolean(b.preview);
+	const label = String(b.label || '').replace(/[\u0000-\u001f]/g, '').slice(0, 80);
+	const j = { id, label, domain, site, useApi, status: 'queued', created: Date.now(), log: [], by, opts: { maxPages, skipImages: Boolean(b.skipImages), mode, preview } };
+	jobs.set(id, j);
+	persist(j);
+	queue.push(j);
+	logLine(j, `queued: ${label ? label + ' · ' : ''}${domain}${useApi ? (site ? ` (DUDA site ${site})` : ' (DUDA API, site lookup by domain)') : ' (public pages only)'}`);
+	pump();
+	return j;
+}
 app.post('/api/jobs', need, async (req, res) => {
 	try {
-		const b = req.body || {};
-		if (queue.length + running.size >= MAX_QUEUE) return res.status(429).json({ error: 'The queue is full. Wait for a job to finish.' });
-		const domain = await validateDomain(b.domain);
-		const site = b.site ? String(b.site).trim() : '';
-		if (site && !/^[A-Za-z0-9_-]{3,40}$/.test(site)) return res.status(400).json({ error: 'Site name looks wrong (letters and numbers only)' });
-		const useApi = Boolean(b.useApi) && API_AVAILABLE;
-		const maxPages = Math.min(MAX_PAGES_CAP, Math.max(0, parseInt(b.maxPages, 10) || 0));
-		const id = crypto.randomBytes(8).toString('hex');
-		fs.mkdirSync(jobDir(id), { recursive: true });
-		const mode = ['auto', 'duda', 'generic'].includes(b.mode) ? b.mode : 'auto';
-		const preview = Boolean(b.preview);
-		const j = { id, domain, site, useApi, status: 'queued', created: Date.now(), log: [], by: req.by, opts: { maxPages, skipImages: Boolean(b.skipImages), mode, preview } };
-		jobs.set(id, j);
-		persist(j);
-		queue.push(j);
-		logLine(j, `queued: ${domain}${useApi ? (site ? ` (DUDA site ${site})` : ' (DUDA API, site lookup by domain)') : ' (public pages only)'}`);
-		pump();
-		res.status(201).json(publicJob(j));
+		res.status(201).json(publicJob(await enqueue(req.body || {}, req.by)));
 	} catch (e) {
-		res.status(400).json({ error: e.message });
+		res.status(e.status || 400).json({ error: e.message });
 	}
+});
+// Several prospects at once: one per line ("Church name, website" or just the website). Runs one after another.
+app.post('/api/batch', need, async (req, res) => {
+	const b = req.body || {};
+	const rows = parseBatch(b.text);
+	if (!rows.length) return res.status(400).json({ error: 'Paste at least one website, one per line.' });
+	if (rows.length > MAX_BATCH) return res.status(400).json({ error: `Up to ${MAX_BATCH} websites at a time (you pasted ${rows.length}).` });
+	const results = [];
+	for (const r of rows) {
+		if (r.duplicate) {
+			results.push({ ...r, ok: false, error: 'Listed twice; skipped.' });
+			continue;
+		}
+		try {
+			const j = await enqueue({ ...b, domain: r.domain, label: r.label, site: '', useApi: false }, req.by);
+			results.push({ label: r.label, domain: j.domain, ok: true, id: j.id });
+		} catch (e) {
+			results.push({ label: r.label, domain: r.domain, ok: false, error: e.message });
+			if (e.status === 429) {
+				const rest = rows.slice(results.length);
+				for (const x of rest) results.push({ label: x.label, domain: x.domain, ok: false, error: 'Not queued: the queue is full.' });
+				break;
+			}
+		}
+	}
+	res.json({ queued: results.filter((x) => x.ok).length, results });
+});
+app.get('/api/jobs.csv', need, (req, res) => {
+	const rows = [['Name', 'Website', 'Status', 'Pages', 'Images', 'Documents', 'Zip MB', 'To check', 'Started', 'Error']];
+	for (const j of [...jobs.values()].sort((a, b) => a.created - b.created)) {
+		const s = j.summary || {};
+		rows.push([j.label || '', j.domain, j.status, s.pages ?? '', s.images ?? '', s.documents ?? '', s.zipMB ?? '', s.flags ?? '', j.started ? new Date(j.started).toISOString() : '', j.error || '']);
+	}
+	res.type('text/csv').set('Content-Disposition', 'attachment; filename="exports.csv"').send(rows.map((r) => r.map(csvCell).join(',')).join('\r\n') + '\r\n');
 });
 app.post('/api/jobs/:id/cancel', need, (req, res) => {
 	const j = jobs.get(req.params.id);
@@ -343,7 +385,7 @@ app.delete('/api/jobs/:id', need, (req, res) => {
 app.get('/api/jobs/:id/download', need, (req, res) => {
 	const j = jobs.get(req.params.id);
 	if (!j || j.status !== 'done' || !j.zip) return res.status(404).json({ error: 'No ZIP for this job' });
-	res.download(path.join(jobDir(j.id), j.zip), j.zip);
+	res.download(path.join(jobDir(j.id), j.zip), (slug(j.label) || slug(j.domain) || 'export') + '.zip');
 });
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 

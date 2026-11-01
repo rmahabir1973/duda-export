@@ -88,3 +88,7 @@ The exporter also works on **any other church website** (WordPress, Wix, Squares
 - `data/brand.json` and a "Brand colours" section: dominant colours of the logo and the site's CSS, with a suggested primary and accent colour to use as custom colours in the Design gallery.
 
 Content belongs to the church: keep previews password-protected and noindex, and do not reuse photos of identifiable people.
+
+## Batch of prospects
+
+The "Batch of prospects" card takes up to 40 churches at a time, one per line: `Church name, website` (or just the website; rows pasted from a spreadsheet work). They run one after another using the same settings as a single export, with "Preview only" ticked by default (home + key pages, no documents), which is the right size for outreach previews. Each ZIP downloads under the church's name, and "Download the list as a spreadsheet" gives a CSV of every export with status, page and image counts and anything flagged to check. `MAX_QUEUE` (default 40) caps how many jobs can wait at once.

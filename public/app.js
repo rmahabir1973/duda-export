@@ -32,6 +32,21 @@ $('f').addEventListener('submit', async (e) => {
 	}
 	$('go').disabled = false;
 });
+$('bf').addEventListener('submit', async (e) => {
+	e.preventDefault();
+	$('berr').textContent = '';
+	$('bres').innerHTML = '';
+	$('bgo').disabled = true;
+	try {
+		const r = await api('/api/batch', { method: 'POST', body: JSON.stringify({ text: $('btext').value, mode: $('bmode').value, maxPages: $('bmax').value, preview: $('bpreview').checked }) });
+		$('bres').innerHTML = r.results.map((x) => `<li>${x.ok ? '✔' : '✖'} <b>${esc(x.label || x.domain)}</b>${x.label ? ' · ' + esc(x.domain) : ''}${x.ok ? ' queued' : ' — ' + esc(x.error)}</li>`).join('');
+		if (r.queued) $('btext').value = r.results.filter((x) => !x.ok).map((x) => (x.label ? x.label + ', ' : '') + x.domain).join('\n');
+		refresh();
+	} catch (x) {
+		$('berr').textContent = x.message;
+	}
+	$('bgo').disabled = false;
+});
 $('logout').onclick = async () => {
 	await api('/logout', { method: 'POST' });
 	location.reload();
@@ -54,7 +69,7 @@ async function refresh() {
 		return;
 	}
 	$('rows').innerHTML = list.length
-		? list.map((j) => `<tr><td><b>${esc(j.domain)}</b><div class="small">${esc(when(j.created))}${j.useApi ? ' · API' : ''}${j.opts && j.opts.preview ? ' · preview' : ''}</div></td>
+		? list.map((j) => `<tr><td><b>${esc(j.label || j.domain)}</b>${j.label ? `<div class="small">${esc(j.domain)}</div>` : ''}<div class="small">${esc(when(j.created))}${j.useApi ? ' · API' : ''}${j.opts && j.opts.preview ? ' · preview' : ''}</div></td>
 		<td><span class="badge ${j.status}">${j.status}</span></td><td>${result(j)}</td>
 		<td><div class="actions">${j.status === 'done' ? `<a href="/api/jobs/${j.id}/download"><button class="sm" type="button">Download ZIP</button></a>` : ''}
 		<button class="sm" data-act="log" data-id="${j.id}" type="button">Log</button>

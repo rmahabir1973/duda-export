@@ -27,6 +27,21 @@
     </form>
   </section>
   <section class="card">
+    <h2>Batch of prospects</h2>
+    <form id="bf">
+      <label for="btext">One church per line: <code>Church name, website</code> or just the website. You can paste rows straight from a spreadsheet. Up to 40 at a time; they run one after another.</label>
+      <textarea id="btext" rows="6" placeholder="Agassiz United Church, agassizunitedchurch.ca&#10;Example United, www.exampleunited.org" style="width:100%;font:inherit;padding:8px"></textarea>
+      <div class="row">
+        <div><label for="bmode">Website type</label><select id="bmode"><option value="auto" selected>Detect automatically</option><option value="generic">Any other website</option><option value="duda">DUDA</option></select></div>
+        <div><label for="bmax">Max pages (optional)</label><input id="bmax" type="number" min="0" placeholder="all"></div>
+      </div>
+      <label class="inline"><input id="bpreview" type="checkbox" checked> Preview only: home + key pages, no documents (recommended for outreach)</label>
+      <button class="primary" id="bgo" type="submit">Queue all</button> <a href="/api/jobs.csv" class="small">Download the list as a spreadsheet (CSV)</a>
+      <p class="err" id="berr" role="alert"></p>
+      <ul id="bres" class="small"></ul>
+    </form>
+  </section>
+  <section class="card">
     <h2>Exports</h2>
     <table><thead><tr><th>Site</th><th>Status</th><th>Result</th><th></th></tr></thead><tbody id="rows"><tr><td colspan="4" class="small">Loading…</td></tr></tbody></table>
     <div id="logWrap" hidden><div class="small" id="logTitle"></div><pre class="log" id="log"></pre></div>
