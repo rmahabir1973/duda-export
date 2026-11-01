@@ -7,6 +7,9 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createStore } from './deploy/store.mjs';
+import { configFromEnv, makeClients } from './deploy/clients.mjs';
+import { createDeployRouter } from './deploy/routes.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const env = process.env;
@@ -286,6 +289,9 @@ app.post('/logout', (req, res) => {
 	res.clearCookie('cw_session', { path: '/' });
 	res.json({ ok: true });
 });
+
+app.use('/api/deploy', createDeployRouter({ need, store: createStore(path.join(DATA_DIR, 'deploy')), clients: makeClients(configFromEnv(env)) }));
+app.get('/deploy', (req, res) => res.type('html').send(html(auth(req) === 'session' ? 'deploy.html' : 'login.html')));
 
 app.get('/api/config', need, (req, res) => res.json({ apiAvailable: API_AVAILABLE, maxPagesCap: MAX_PAGES_CAP, retentionHours: RETENTION_MS / 3600000, allowedDomains: ALLOWED_DOMAINS }));
 app.get('/api/jobs', need, (req, res) => res.json([...jobs.values()].sort((a, b) => b.created - a.created).map(publicJob)));

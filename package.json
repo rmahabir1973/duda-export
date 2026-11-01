@@ -4,12 +4,18 @@
   "private": true,
   "type": "module",
   "description": "Password-protected web front end for duda-export: run a DUDA site export from a browser (or an agent) and download the ZIP.",
-  "scripts": { "start": "node server.mjs" },
-  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test test/deploy.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "archiver": "^7.0.1",
     "express": "^4.21.2",
     "playwright": "^1.48.0",
+    "ssh2": "^1.17.0",
     "turndown": "^7.2.0",
     "turndown-plugin-gfm": "^1.0.2"
   }

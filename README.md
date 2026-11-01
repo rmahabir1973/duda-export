@@ -19,8 +19,8 @@ browser (or an agent with the API token)  ->  this app (Express)  ->  duda-expor
    | `APP_PASSWORD` | yes | The login password, 10+ characters (e.g. `openssl rand -base64 18`) |
    | `API_TOKEN` | no | 24+ characters. Lets scripts/agents call the API with `Authorization: Bearer ...` |
    | `DUDA_MCP_TOKEN` | no | Your DUDA MCP token (Duda account settings). Enables drafts, content library, blog authors/dates. Preferred |
-   | `DUDA_MCP_URL` | no | DUDA MCP endpoint; defaults to `https://mcp.duda.co/mcp` |
-   | `DUDA_API_USER`, `DUDA_API_PASS` | no | Alternative to the MCP token: DUDA REST API credentials (only if you have them) |
+| `DUDA_MCP_URL` | no | DUDA MCP endpoint; defaults to `https://mcp.duda.co/mcp` |
+| `DUDA_API_USER`, `DUDA_API_PASS` | no | Alternative to the MCP token: DUDA REST API credentials (only if you have them) |
    | `ALLOWED_DOMAINS` | no | Comma list (e.g. `churchwebglobal.com,erindaleunited.church`) to restrict what can be exported |
    | `MAX_CONCURRENT_JOBS` | no | Default 1. Each job uses about 1 GB RAM while Chromium runs |
    | `RETENTION_HOURS` | no | Default 48. ZIPs and logs are deleted after this |
@@ -41,7 +41,7 @@ cheap to regenerate. For persistence add a Railway Volume mounted at `/data`, se
 
 ## Using it
 
-* **Browser:** sign in, enter the church's live domain (`www.example.org`), optionally tick *Use DUDA account access*,
+* **Browser:** sign in, enter the church's live domain (`www.example.org`), optionally tick *Use the DUDA API*,
   press *Start export*. A full church site takes 4-8 minutes. Download the ZIP when the badge says *done*.
 * **Agents/scripts** (needs `API_TOKEN`):
   ```
@@ -92,3 +92,34 @@ Content belongs to the church: keep previews password-protected and noindex, and
 ## Batch of prospects
 
 The "Batch of prospects" card takes up to 40 churches at a time, one per line: `Church name, website` (or just the website; rows pasted from a spreadsheet work). They run one after another using the same settings as a single export, with "Preview only" ticked by default (home + key pages, no documents), which is the right size for outreach previews. Each ZIP downloads under the church's name, and "Download the list as a spreadsheet" gives a CSV of every export with status, page and image counts and anything flagged to check. `MAX_QUEUE` (default 40) caps how many jobs can wait at once.
+
+## Deploy a church (v6)
+
+Open **Deploy a church** (top right of the Exporter). Add a church (name, optional current website, plan), then work down the eight stages. Every stage has **Check** (read-only), **Preview what Run will do**, **Run** (asks to confirm) and **Test**. A stage that cannot be automated yet, or whose service is not configured, shows the exact command or step to do by hand, with tick-boxes, so staff can use the page from day one.
+
+| # | Stage | Automated when configured |
+|---|-------|---------------------------|
+| 1 | Create the preview site | gateway key, wp-config constants, address swap, site title, preview mode (SSH + WP-CLI); preview DNS record |
+| 2 | Check the church's current DNS | always (read-only): who hosts DNS, is the site on Duda, where email goes, SPF problems |
+| 3 | Client approval and payment | tick-boxes: approved, plan, paid, who holds the registrar login (gate for stages 4, 6) |
+| 4 | Move the domain's DNS | Cloudflare zone, copy existing records, nameserver detection, website records (add/change only, never delete) |
+| 5 | Move the preview onto the real domain | address swap, preview mode off, checks SSL, robots, banner, www, sitemap (domain is added in hPanel by hand) |
+| 6 | Email accounts (Email plan) | temporary passwords generated and shown once; MX switch is gated behind "mailboxes made" and "old mail moved" |
+| 7 | Sending through Postmark | Postmark domain, DKIM, Return-Path, one merged SPF, DMARC, verification, site mail via Postmark SMTP, optional test email |
+| 8 | Hand over | Editor login with the staff view, gateway status; tick-boxes for welcome email, Stripe, backups, monitoring |
+
+### Environment variables (set as Railway variables, never in chat)
+
+`GATEWAY_ADMIN_KEY`, `GATEWAY_URL`, `DEFAULT_DAILY_TOKENS`, `DEFAULT_DAILY_IMAGES` · `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_PREVIEW_ZONE_ID`, `PREVIEW_DOMAIN`, `HOSTINGER_IP`, `TEMPLATE_SLUG` · `POSTMARK_ACCOUNT_TOKEN`, `POSTMARK_SERVER_TOKEN` · `SSH_HOST`, `SSH_PORT`, `SSH_USER`, `SSH_PRIVATE_KEY` (use `\n` for line breaks), `SSH_PASSPHRASE`, `SITE_ROOT` (default `$HOME/domains/{host}/public_html`), `WP_CLI` · `DUDA_IPS`, `DUDA_HOSTS`, `OUR_MX_HOSTS`, `MAIL_HOST`, `DMARC_RUA`, `DNS_SERVERS` · `SMARTERMAIL_API_READY`.
+
+Cloudflare token permissions: Zone:Create (account), Zone:Read, DNS:Edit for all zones. The top of the page shows which services are configured.
+
+### Safety rules built in
+- DNS records are only added or changed. A conflicting record is flagged for a person to remove.
+- One SPF record per domain (existing ones are merged, never duplicated).
+- MX is never changed until mailboxes exist and old mail is moved.
+- Secrets (gateway keys, Postmark token, temporary passwords) are masked in output and not stored. Temporary passwords are shown once.
+- Every value placed in a shell command is quoted. One action at a time per church. Every action is logged on the church's page.
+
+### Not yet tested against the real services
+Cloudflare, Postmark, SSH/WP-CLI on Hostinger and the gateway mint call are tested only against fakes (`npm test`). Do a first run on a throwaway church. Not yet automated: creating the subdomain/clone in hPanel, adding the domain in hPanel, and the SmarterMail domain/mailboxes (needs your server's `/Documentation/api`).

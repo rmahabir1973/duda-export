@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Deploy · ChurchWeb Global</title><meta name="robots" content="noindex,nofollow"><link rel="stylesheet" href="/assets/style.css"></head>
+<body>
+<header><h1>Deploy a church <small>ChurchWeb Global</small></h1><a class="navlink" href="/">Exporter</a><button id="logout">Sign out</button></header>
+<main>
+  <section class="card" id="listCard">
+    <h2>Churches</h2>
+    <form id="newForm" class="row3">
+      <div><label for="nName">Church name</label><input id="nName" type="text" required maxlength="80" placeholder="Britannia United Church" autocomplete="off"></div>
+      <div><label for="nDomain">Their current website (optional now)</label><input id="nDomain" type="text" placeholder="britanniaunited.ca" autocomplete="off"></div>
+      <div><label for="nPlan">Plan</label><select id="nPlan"><option value="website">Website</option><option value="email">Website + Email</option></select></div>
+      <div><button class="primary" type="submit">Add church</button></div>
+    </form>
+    <p class="err" id="nErr"></p>
+    <table id="tbl"><thead><tr><th>Church</th><th>Domain</th><th>Plan</th><th>Progress</th></tr></thead><tbody></tbody></table>
+    <p class="hint" id="empty" hidden>No churches yet. Add the first one above.</p>
+    <details class="setup"><summary>Server setup status</summary><div id="setup"></div></details>
+  </section>
+  <section id="detail" hidden></section>
+</main>
+<script src="/assets/deploy.js"></script>
+</body></html>

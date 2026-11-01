@@ -30,3 +30,24 @@ pre.log { background: #1d2327; color: #e6e6e6; padding: 12px; border-radius: 8px
 .login { max-width: 360px; margin: 14vh auto; }
 .actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .small { font-size: 13px; color: var(--muted); }
+.navlink { color: #fff; text-decoration: none; border: 1px solid #fff8; border-radius: 6px; padding: 5px 12px; }
+.row3 { display: grid; grid-template-columns: 2fr 2fr 1fr auto; gap: 14px; align-items: end; }
+.row3 button { margin: 0; white-space: nowrap; }
+tr.click { cursor: pointer; } tr.click:hover { background: #f6eef7; }
+.dots { display: inline-flex; gap: 4px; } .dot { width: 14px; height: 14px; border-radius: 50%; background: #e5e7eb; display: inline-block; } .dot.on { background: #2e9e4f; } .dot.skip { background: #fff; border: 1px dashed #cfd4da; }
+.setup { margin-top: 14px; } .setup .ok { color: #17692e; } .setup .no { color: #8a1f1f; }
+.stage { border: 1px solid var(--line); border-radius: 10px; margin-bottom: 14px; background: #fff; }
+.stage > .hd { display: flex; gap: 10px; align-items: center; padding: 12px 16px; cursor: pointer; }
+.stage .num { width: 26px; height: 26px; border-radius: 50%; background: var(--p); color: #fff; display: grid; place-items: center; font-weight: 700; font-size: 13px; flex: none; }
+.stage.done .num { background: #2e9e4f; } .stage.blocked .num { background: #9ca3af; }
+.stage .tt { font-weight: 600; flex: 1; } .stage .bd { padding: 0 16px 16px; }
+.btns { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; } .btns button.primary { margin: 0; padding: 8px 14px; }
+ul.res { list-style: none; padding: 0; margin: 8px 0; } ul.res li { padding: 6px 0; border-bottom: 1px solid var(--line); display: flex; gap: 10px; }
+.ic { flex: none; width: 70px; font-size: 11px; font-weight: 700; text-transform: uppercase; padding-top: 3px; }
+.pass .ic, .done .ic { color: #17692e; } .fail .ic, .error .ic { color: #8a1f1f; } .warn .ic, .manual .ic { color: #7a5a00; } .info .ic, .planned .ic { color: #335; }
+.res pre { margin: 4px 0 0; white-space: pre-wrap; word-break: break-word; background: #f4f4f6; padding: 6px 8px; border-radius: 6px; font-size: 12.5px; }
+.secret { background: #fff4d6; border: 1px solid #e6c46a; border-radius: 8px; padding: 10px 12px; margin: 10px 0; white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 13px; }
+.chk { display: flex; gap: 8px; align-items: flex-start; margin: 6px 0; }
+.lg { font-size: 12.5px; color: var(--muted); max-height: 160px; overflow: auto; }
+@media (max-width: 700px) { .row3 { grid-template-columns: 1fr; } }
+.chk { font-weight: 400; }
