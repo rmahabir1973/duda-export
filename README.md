@@ -93,20 +93,27 @@ Content belongs to the church: keep previews password-protected and noindex, and
 
 The "Batch of prospects" card takes up to 40 churches at a time, one per line: `Church name, website` (or just the website; rows pasted from a spreadsheet work). They run one after another using the same settings as a single export, with "Preview only" ticked by default (home + key pages, no documents), which is the right size for outreach previews. Each ZIP downloads under the church's name, and "Download the list as a spreadsheet" gives a CSV of every export with status, page and image counts and anything flagged to check. `MAX_QUEUE` (default 40) caps how many jobs can wait at once.
 
-## Deploy a church (v6)
+## Deploy a church
 
-Open **Deploy a church** (top right of the Exporter). Add a church (name, optional current website, plan), then work down the eight stages. Every stage has **Check** (read-only), **Preview what Run will do**, **Run** (asks to confirm) and **Test**. A stage that cannot be automated yet, or whose service is not configured, shows the exact command or step to do by hand, with tick-boxes, so staff can use the page from day one.
+Open **Deploy a church** (top right of the Exporter). Add a church (name, optional current website, plan). The page shows eight stages. Each stage is a short list of plain questions, checked live:
 
-| # | Stage | Automated when configured |
-|---|-------|---------------------------|
-| 1 | Create the preview site | gateway key, wp-config constants, address swap, site title, preview mode (SSH + WP-CLI); preview DNS record |
-| 2 | Check the church's current DNS | always (read-only): who hosts DNS, is the site on Duda, where email goes, SPF problems |
-| 3 | Client approval and payment | tick-boxes: approved, plan, paid, who holds the registrar login (gate for stages 4, 6) |
-| 4 | Move the domain's DNS | Cloudflare zone, copy existing records, nameserver detection, website records (add/change only, never delete) |
-| 5 | Move the preview onto the real domain | address swap, preview mode off, checks SSL, robots, banner, www, sitemap (domain is added in hPanel by hand) |
-| 6 | Email accounts (Email plan) | temporary passwords generated and shown once; MX switch is gated behind "mailboxes made" and "old mail moved" |
-| 7 | Sending through Postmark | Postmark domain, DKIM, Return-Path, one merged SPF, DMARC, verification, site mail via Postmark SMTP, optional test email |
-| 8 | Hand over | Editor login with the staff view, gateway status; tick-boxes for welcome email, Stripe, backups, monitoring |
+- ✔ **yes**: nothing to do.
+- ✖ **no** with a button: one click fixes it (for example "Add the DNS record", "Connect it", "Add it to Cloudflare").
+- ✖ **no** with "How to do this by hand": the few things a person must do (create the site in hPanel, the church switching nameservers, the Oxygen licence, mailboxes). Tick **Done** where it asks, or press Re-check: where the app can look, it detects the change itself.
+- Items wait ("…") until the item they depend on is done, so the order is always safe.
+
+**Check everything** looks at all eight stages without changing anything. **Fix everything that can be fixed** in a stage runs the safe fixes in order and stops at the first problem. Switching a church's email (MX) is never part of that: it has its own button and its own confirmation.
+
+| # | Stage | Questions it answers |
+|---|-------|----------------------|
+| 1 | Preview site | Created on Hostinger? Preview address in DNS? AI Assistant plugin active and connected to our gateway? Address, name and preview mode right? Oxygen licensed? |
+| 2 | Where is the church today? | Read-only: where DNS, the website and email are now; SPF health |
+| 3 | Approval and payment | Approved, plan, paid, registrar contact (tick-boxes) |
+| 4 | Move the domain's DNS | In our Cloudflare? Records copied? Nameservers switched? Website pointing at Hostinger? |
+| 5 | Go live | Domain shows the new site? SSL valid? WordPress address real? Preview mode off? www, robots, sitemap fine? |
+| 6 | Email accounts (Email plan) | Mailboxes created? Old mail moved? Email now going to our server? |
+| 7 | Sending email (Postmark) | Domain in Postmark? Records in Cloudflare? One SPF + DMARC? Verified? Website sending through Postmark? |
+| 8 | Hand over | Church login? Staff view on? AI Assistant switched on? Welcome email, Stripe, backups, monitoring |
 
 ### Environment variables (set as Railway variables, never in chat)
 
@@ -115,6 +122,8 @@ Open **Deploy a church** (top right of the Exporter). Add a church (name, option
 Cloudflare token permissions: Zone:Create (account), Zone:Read, DNS:Edit for all zones. The top of the page shows which services are configured.
 
 ### Safety rules built in
+- Checking never changes anything. A fix only runs when someone presses its button, and only if that item currently checks "no".
+- The site folder is found automatically (Hostinger puts subdomains in different places).
 - DNS records are only added or changed. A conflicting record is flagged for a person to remove.
 - One SPF record per domain (existing ones are merged, never duplicated).
 - MX is never changed until mailboxes exist and old mail is moved.

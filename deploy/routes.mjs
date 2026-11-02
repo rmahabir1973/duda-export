@@ -1,6 +1,6 @@
-// Express router for the deployment pipeline. Mounted at /api/deploy behind the Ops app's sign-in.
+// Express router for the deployment checklist. Mounted at /api/deploy behind the Ops app's sign-in.
 import express from 'express';
-import { STAGES, stageByKey, blockedBy } from './stages.mjs';
+import { STAGES, stageByKey, reqOf, blockedBy, testStage, fixReq, isSatisfied, depMet } from './checks.mjs';
 import { configured } from './clients.mjs';
 
 const LABELS = { website: 'Website', email: 'Website + Email' };
@@ -9,25 +9,31 @@ export function createDeployRouter({ need, store, clients }) {
 	const r = express.Router();
 	r.use(need);
 	const busy = new Set(); // one action at a time per church
+	const cfgFlags = () => configured(clients.cfg);
+	const ctxFor = () => ({ c: clients, configured: cfgFlags(), memo: {}, facts: null, secret: null });
+
+	const stageDone = (stage, results) => stage.reqs.every((q) => isSatisfied(results?.[q.id]?.state));
 	const view = (c) => {
 		const o = JSON.parse(JSON.stringify(c));
-		o.stageStates = {};
+		o.stageStates = {}; o.guide = {};
 		for (const s of STAGES) {
 			const st = o.stages[s.key] || {};
-			o.stageStates[s.key] = { done: !!st.done, manual: st.manual || {}, last: st.last || null, blockedBy: blockedBy(o, s) };
+			o.stageStates[s.key] = { done: !!st.done, results: st.results || null, at: st.at || null, blockedBy: blockedBy(o, s) };
+			o.guide[s.key] = Object.fromEntries(s.reqs.map((q) => [q.id, typeof q.howTo === 'function' ? q.howTo(o, clients.cfg) : q.howTo || '']));
 		}
 		return o;
 	};
 	const meta = () => STAGES.map((s) => ({
 		key: s.key, n: s.n, title: s.title, blurb: s.blurb, needs: s.needs, onlyPlan: s.onlyPlan || null,
-		manual: s.manual.map((m) => ({ id: m.id })), steps: s.steps,
+		reqs: s.reqs.map((q) => ({ id: q.id, label: q.label, manual: !!q.manual, canFix: !!q.fix, fixLabel: q.fixLabel || '', services: q.services || [], deps: q.deps || [], confirm: q.confirm || '' })),
 	}));
-	const manualLabels = (c, cfg) => Object.fromEntries(STAGES.map((s) => [s.key, s.manual.map((m) => ({ id: m.id, label: m.label(c, cfg, c.facts?.[s.key]) }))]));
-
-	r.get('/config', (req, res) => {
-		const cfg = clients.cfg;
-		res.json({ configured: configured(cfg), plans: LABELS, stages: meta(), previewDomain: cfg.previewDomain, templateSlug: cfg.templateSlug });
+	const save = (id, stage, results, ctx, by, note) => store.update(id, (c) => {
+		const st = (c.stages[stage.key] ||= {});
+		st.results = results; st.at = Date.now(); st.done = stageDone(stage, results);
+		if (ctx.facts) c.facts[stage.key] = { ...(c.facts[stage.key] || {}), ...ctx.facts };
 	});
+
+	r.get('/config', (req, res) => res.json({ configured: cfgFlags(), plans: LABELS, stages: meta(), previewDomain: clients.cfg.previewDomain, templateSlug: clients.cfg.templateSlug }));
 
 	r.get('/churches', (req, res) => res.json(store.list().map((c) => ({ id: c.id, name: c.name, domain: c.domain, plan: c.plan, created: c.created, stages: Object.fromEntries(STAGES.map((s) => [s.key, !!c.stages[s.key]?.done])) }))));
 
@@ -38,7 +44,7 @@ export function createDeployRouter({ need, store, clients }) {
 	r.get('/churches/:id', (req, res) => {
 		const c = store.get(req.params.id);
 		if (!c) return res.status(404).json({ error: 'Church not found' });
-		res.json({ ...view(c), manualLabels: manualLabels(c, clients.cfg) });
+		res.json(view(c));
 	});
 
 	r.patch('/churches/:id', (req, res) => {
@@ -66,54 +72,66 @@ export function createDeployRouter({ need, store, clients }) {
 		store.remove(req.params.id); res.json({ ok: true });
 	});
 
+	/** Tick or untick a "by hand" requirement. */
 	r.put('/churches/:id/stages/:key/manual', (req, res) => {
 		const s = stageByKey(req.params.key), { id, value } = req.body || {};
-		if (!s || !s.manual.some((m) => m.id === id)) return res.status(400).json({ error: 'Unknown step.' });
+		const q = s && reqOf(s, id);
+		if (!q || !q.manual) return res.status(400).json({ error: 'Unknown item.' });
 		try {
 			const c = store.update(req.params.id, (c) => {
 				const st = (c.stages[s.key] ||= {}); (st.manual ||= {})[id] = !!value;
-				if (s.key === 'approval') st.done = STAGES[2].manual.every((m) => st.manual[m.id]) && !!c.domain;
+				st.results = { ...(st.results || {}), [id]: { state: value ? 'ok' : 'no', detail: value ? 'Ticked.' : '' } };
+				st.done = stageDone(s, st.results);
 			});
-			store.log(req.params.id, req.by, `${s.title}: "${id}" ${value ? 'ticked' : 'unticked'}`);
+			store.log(req.params.id, req.by, `${s.title}: "${q.label}" ${value ? 'ticked' : 'unticked'}`);
 			res.json(view(c));
 		} catch (e) { res.status(404).json({ error: e.message }); }
 	});
 
-	/** action: check | dry | run | test */
-	r.post('/churches/:id/stages/:key/:action', async (req, res) => {
-		const { id, key, action } = req.params;
-		const s = stageByKey(key);
-		if (!s || !['check', 'dry', 'run', 'test'].includes(action)) return res.status(400).json({ error: 'Unknown stage or action.' });
-		const ch = store.get(id);
+	/** Look at everything in a stage (read-only). */
+	r.post('/churches/:id/stages/:key/check', async (req, res) => {
+		const { id, key } = req.params, s = stageByKey(key), ch = store.get(id);
+		if (!s) return res.status(400).json({ error: 'Unknown stage.' });
 		if (!ch) return res.status(404).json({ error: 'Church not found' });
-		const b = req.body || {};
-		const writes = action === 'run';
-		if (writes) {
-			if (b.confirm !== true) return res.status(400).json({ error: 'Confirm first.' });
-			const blocked = blockedBy(ch, s);
-			if (blocked.length) return res.status(409).json({ error: 'Not ready: ' + blocked.map((x) => x === 'plan' ? 'this stage is only for the Website + Email plan' : 'finish "' + stageByKey(x).title + '" first').join('; ') });
-		}
 		if (busy.has(id)) return res.status(409).json({ error: 'Another action is running for this church. Try again in a moment.' });
 		busy.add(id);
-		const ctx = { c: clients, facts: null, secret: null };
 		try {
-			const opts = { dry: action === 'dry', cutoverMx: !!b.cutoverMx, testTo: typeof b.testTo === 'string' && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(b.testTo) ? b.testTo : '', email: b.email, name: b.name };
-			let result;
-			if (action === 'check') result = await s.check(ctx, ch);
-			else if (action === 'test') result = await s.test(ctx, ch, opts);
-			else result = await s.run(ctx, ch, opts);
-			const at = Date.now();
-			store.update(id, (c) => {
-				const st = (c.stages[key] ||= {});
-				st.last = { at, action, ok: result.ok, items: result.items.map((i) => (i.secret ? { id: i.id, label: i.label, status: i.status, detail: '(shown once, not saved)' } : { ...i })) };
-				if (action === 'check' || action === 'test') st.done = key === 'approval' ? st.done : result.ok;
-				if (ctx.facts) c.facts[key] = { ...(c.facts[key] || {}), ...ctx.facts };
-			});
-			store.log(id, req.by, `${s.title}: ${action} → ${result.ok ? 'ok' : 'needs attention'}`, result.ok ? 'info' : 'warn');
-			// secrets (temporary passwords) are returned once and never stored
-			res.json({ ...result, at, action, secret: ctx.secret || undefined, church: view(store.get(id)) });
+			const ctx = ctxFor(), results = await testStage(ctx, ch, s);
+			const c = save(id, s, results, ctx, req.by);
+			res.json({ church: view(c) });
+		} catch (e) { res.status(500).json({ error: e.message }); } finally { busy.delete(id); }
+	});
+
+	/** Fix one requirement, or body.req === "all" for everything in the stage that can be fixed safely. */
+	r.post('/churches/:id/stages/:key/fix', async (req, res) => {
+		const { id, key } = req.params, s = stageByKey(key), ch = store.get(id), b = req.body || {};
+		if (!s) return res.status(400).json({ error: 'Unknown stage.' });
+		if (!ch) return res.status(404).json({ error: 'Church not found' });
+		if (b.confirm !== true) return res.status(400).json({ error: 'Confirm first.' });
+		const blocked = blockedBy(ch, s);
+		if (blocked.length) return res.status(409).json({ error: 'Not ready: ' + blocked.map((x) => (x === 'plan' ? 'this stage is only for the Website + Email plan' : 'finish "' + stageByKey(x).title + '" first')).join('; ') });
+		if (busy.has(id)) return res.status(409).json({ error: 'Another action is running for this church. Try again in a moment.' });
+		busy.add(id);
+		const ctx = ctxFor(), fixed = [];
+		try {
+			let results = await testStage(ctx, ch, s);
+			const targets = b.req === 'all' ? s.reqs.filter((q) => q.fix && !q.confirm) : [reqOf(s, b.req)].filter(Boolean);
+			if (!targets.length) return res.status(400).json({ error: 'Nothing to fix.' });
+			for (const q of targets) {
+				const cur = results[q.id];
+				if (cur?.state === 'blocked') { if (b.req !== 'all') fixed.push({ id: q.id, ok: false, detail: 'Waiting for an earlier item.' }); continue; }
+				if (!['no', 'error', 'unknown'].includes(cur?.state)) { if (b.req !== 'all') fixed.push({ id: q.id, ok: true, detail: 'Already done.' }); continue; }
+				if ((q.deps || []).some((d) => !depMet(results[d]?.state))) { fixed.push({ id: q.id, ok: false, detail: 'Waiting for an earlier item.' }); continue; }
+				if (b.testTo) ctx.testTo = b.testTo;
+				const out = await fixReq(ctx, ch, s, q, cur);
+				fixed.push({ id: q.id, ok: !!out.ok, detail: out.detail || '', howTo: out.howTo || '', unavailable: out.unavailable || undefined });
+				store.log(id, req.by, `${s.title}: ${q.label} → ${out.ok ? 'fixed' : 'could not fix'}`, out.ok ? 'info' : 'warn');
+				if (out.ok) { ctx.memo = {}; results = await testStage(ctx, store.get(id), s); } else if (b.req === 'all') break;
+			}
+			const c = save(id, s, results, ctx, req.by);
+			res.json({ fixed, secret: ctx.secret || undefined, church: view(c) });
 		} catch (e) {
-			store.log(id, req.by, `${s.title}: ${action} failed: ${e.message}`, 'error');
+			store.log(id, req.by, `${s.title}: fix failed: ${e.message}`, 'error');
 			res.status(500).json({ error: e.message });
 		} finally { busy.delete(id); }
 	});
