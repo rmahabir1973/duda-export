@@ -11,7 +11,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const PLAN = { website: 'Website', email: 'Website + Email' };
 const KIND = { new: 'New site', migration: 'DUDA migration' };
 const ICON = { ok: '✔', no: '✖', warn: '!', info: 'i', unknown: '?', blocked: '…', error: '!' };
-const SERVICE = { gateway: 'the AI gateway key', cloudflare: 'Cloudflare', previewDns: 'Cloudflare preview zone + Hostinger IP', postmark: 'Postmark account token', smtp: 'Postmark server token', ssh: 'Hostinger SSH', smartermail: 'SmarterMail', hostingerIp: 'Hostinger IP address', hostingerApi: 'Hostinger API key' };
+const SERVICE = { gateway: 'the AI gateway key', cloudflare: 'Cloudflare', previewDns: 'Cloudflare preview zone + Hostinger IP', postmark: 'Postmark account token', smtp: 'Postmark server token', ssh: 'Hostinger SSH', smartermail: 'SmarterMail', hostingerIp: 'Hostinger IP address', hostingerApi: 'Hostinger API key', staffLogin: 'the standard staff login password (STAFF_LOGIN_PASSWORD)' };
 const SAT = new Set(['ok', 'info', 'warn']);
 // The board and the project tabs group the stages into phases a person thinks in.
 const PHASES = [

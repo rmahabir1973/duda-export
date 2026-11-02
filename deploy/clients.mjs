@@ -53,6 +53,7 @@ export function configFromEnv(env = process.env) {
 		sshKey: (env.SSH_PRIVATE_KEY || '').replace(/\\n/g, '\n'), sshPassphrase: env.SSH_PASSPHRASE || '',
 		siteRoot: env.SITE_ROOT || '$HOME/domains/{host}/public_html',
 		wpCli: env.WP_CLI || 'wp',
+		staffLoginUser: clean(env.STAFF_LOGIN_USER) || 'churchweb', staffLoginPassword: String(env.STAFF_LOGIN_PASSWORD || '').trim(),
 		wpAdminEmail: clean(env.WP_ADMIN_EMAIL), hostingerApiBase: (env.HOSTINGER_API_BASE || 'https://developers.hostinger.com').replace(/\/$/, ''), hostingerApiKey: clean(env.HOSTINGER_API_KEY),
 		smartermailUrl: (() => { const u = clean(env.SMARTERMAIL_URL); return u ? (/^https?:\/\//i.test(u) ? u : 'https://' + u).replace(/\/$/, '') : ''; })(),
 		smartermailUser: clean(env.SMARTERMAIL_ADMIN_USER), smartermailPassword: String(env.SMARTERMAIL_ADMIN_PASSWORD || '').trim(),
@@ -70,6 +71,7 @@ export const configured = (cfg) => ({
 	smartermail: !!(cfg.smartermailUrl && cfg.smartermailUser && cfg.smartermailPassword),
 	hostingerIp: !!cfg.hostingerIp,
 	hostingerApi: !!cfg.hostingerApiKey,
+	staffLogin: !!cfg.staffLoginPassword,
 });
 
 async function req(fetchFn, url, { method = 'GET', headers = {}, body, timeout = 20000 } = {}) {
