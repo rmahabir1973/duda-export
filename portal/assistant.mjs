@@ -37,20 +37,35 @@ Rules:
 		list.push(t); calls.set(user.email, list); return false;
 	}
 
+	/** Makes a chat history safe to send: only text and tool blocks are kept (anything else the model sent, such as thinking, is dropped),
+	 *  tool calls and results must pair up, and it must start with the person's own words. */
 	const clean = (messages) => {
 		if (!Array.isArray(messages) || !messages.length) throw new Error('Nothing to answer.');
-		const out = messages.slice(-MAX_MESSAGES).map((m) => {
-			if (!m || !['user', 'assistant'].includes(m.role)) throw new Error('Bad message.');
+		let out = messages.slice(-MAX_MESSAGES).filter((m) => m && ['user', 'assistant'].includes(m.role)).map((m) => {
 			const content = typeof m.content === 'string' ? m.content.slice(0, 8000) : (Array.isArray(m.content) ? m.content : []).map((b) => {
-				if (b?.type === 'text') return { type: 'text', text: String(b.text || '').slice(0, 8000) };
-				if (b?.type === 'tool_use') return { type: 'tool_use', id: String(b.id), name: String(b.name), input: typeof b.input === 'object' && b.input ? b.input : {} };
-				if (b?.type === 'tool_result') return { type: 'tool_result', tool_use_id: String(b.tool_use_id), content: String(b.content || '').slice(0, 8000), ...(b.is_error ? { is_error: true } : {}) };
-				throw new Error('Bad message part.');
-			});
+				if (b?.type === 'text' && String(b.text || '').trim()) return { type: 'text', text: String(b.text).slice(0, 8000) };
+				if (b?.type === 'tool_use' && b.id && b.name) return { type: 'tool_use', id: String(b.id), name: String(b.name), input: typeof b.input === 'object' && b.input ? b.input : {} };
+				if (b?.type === 'tool_result' && b.tool_use_id) return { type: 'tool_result', tool_use_id: String(b.tool_use_id), content: String(b.content || '').slice(0, 8000), ...(b.is_error ? { is_error: true } : {}) };
+				return null;
+			}).filter(Boolean);
 			return { role: m.role, content };
-		});
+		}).filter((m) => (typeof m.content === 'string' ? m.content.trim() : m.content.length));
+		// every tool call needs its result in the very next message, and every result needs its call just before it
+		for (let i = 0; i < out.length; i++) {
+			const m = out[i], next = out[i + 1];
+			if (m.role === 'assistant' && Array.isArray(m.content)) {
+				const ids = m.content.filter((b) => b.type === 'tool_use').map((b) => b.id), got = new Set(next && next.role === 'user' && Array.isArray(next.content) ? next.content.filter((b) => b.type === 'tool_result').map((b) => b.tool_use_id) : []);
+				if (ids.some((id) => !got.has(id))) m.content = m.content.filter((b) => b.type !== 'tool_use');
+			}
+			if (m.role === 'user' && Array.isArray(m.content)) {
+				const prev = out[i - 1], ids = new Set(prev && prev.role === 'assistant' && Array.isArray(prev.content) ? prev.content.filter((b) => b.type === 'tool_use').map((b) => b.id) : []);
+				m.content = m.content.filter((b) => b.type !== 'tool_result' || ids.has(b.tool_use_id));
+			}
+		}
+		out = out.filter((m) => (typeof m.content === 'string' ? m.content.trim() : m.content.length));
 		// the history must start with a person's own message, never a tool result whose request was cut off
 		while (out.length && (out[0].role !== 'user' || (Array.isArray(out[0].content) && out[0].content.some((b) => b.type === 'tool_result')))) out.shift();
+		if (!out.length) throw new Error('Nothing to answer.');
 		return out;
 	};
 
@@ -70,8 +85,8 @@ Rules:
 	/** Runs the model until it answers, or until it asks to change something (then it stops and waits for approval). */
 	async function loop(user, messages) {
 		for (let step = 0; step < MAX_STEPS; step++) {
-			const content = await ask(user, messages);
-			messages.push({ role: 'assistant', content });
+			const content = (await ask(user, messages)).filter((b) => b.type === 'text' || b.type === 'tool_use');
+			messages.push({ role: 'assistant', content: content.length ? content : [{ type: 'text', text: '(no answer)' }] });
 			const uses = content.filter((b) => b.type === 'tool_use');
 			if (!uses.length) return { messages, text: textOf(content) };
 			const held = {}, actions = {}, view = [];

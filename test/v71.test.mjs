@@ -154,7 +154,7 @@ test('assistant: declining does nothing and tells the model so; forged tool name
 
 test('assistant: history is cleaned (no orphaned tool results, bad parts rejected) and questions are rate limited', async () => {
 	const { a } = await mk(Array.from({ length: 50 }, () => [{ type: 'text', text: 'ok' }]));
-	await assert.rejects(a.chat(user, [{ role: 'user', content: [{ type: 'image', source: 'x' }] }]), /Bad message part/);
+	await assert.rejects(a.chat(user, [{ role: 'user', content: [{ type: 'image', source: 'x' }] }]), /Nothing to answer/, 'a message with only unsupported parts is dropped');
 	await assert.rejects(a.chat(user, []), /Nothing to answer/);
 	const r = await a.chat(user, [{ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'old', content: 'x' }] }, { role: 'assistant', content: 'hi' }, { role: 'user', content: 'real question' }]);
 	assert.equal(r.messages[0].content, 'real question');
@@ -232,4 +232,21 @@ test('SmarterMail domain list: tries the known calls and reads the names from wh
 	assert.deepEqual(await sm.domains('t'), { ok: true, domains: ['a.ca', 'b.org'], via: 'api/v1/settings/sysadmin/domain-list' });
 	const none = await makeSmarterMail({ smartermailUrl: 'https://mail.x' }, { fetch: async () => ({ ok: false, status: 404, text: async () => '{}' }) }).domains('t');
 	assert.equal(none.ok, false); assert.match(none.error, /did not return a domain list/);
+});
+
+test('assistant: a history containing thinking blocks or an orphaned tool call is repaired instead of rejected', async () => {
+	const { a, f } = await mk([[{ type: 'text', text: 'Fine.' }]]);
+	const history = [
+		{ role: 'user', content: 'Where is Erindale?' },
+		{ role: 'assistant', content: [{ type: 'thinking', thinking: 'hmm', signature: 'x' }, { type: 'text', text: 'Let me look.' }, { type: 'tool_use', id: 'old1', name: 'look', input: {} }] },
+		{ role: 'user', content: 'Can you check Erindale again' },
+	];
+	const r = await a.chat(user, history);
+	assert.equal(r.text, 'Fine.');
+	const sent = f.calls[0].messages;
+	assert.ok(!JSON.stringify(sent).includes('thinking'), 'thinking blocks are dropped'); assert.ok(!JSON.stringify(sent).includes('old1'), 'the unanswered tool call is dropped');
+	assert.equal(sent.at(-1).content, 'Can you check Erindale again');
+	const { a: b, f: g } = await mk([[{ type: 'thinking', thinking: 'x' }, { type: 'text', text: 'Answer.' }]]);
+	const out = await b.chat(user, [{ role: 'user', content: 'hi' }]);
+	assert.deepEqual(out.messages.at(-1).content, [{ type: 'text', text: 'Answer.' }], 'what the model returns is cleaned before it is saved in the chat');
 });
