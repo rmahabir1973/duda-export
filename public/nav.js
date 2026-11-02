@@ -15,5 +15,6 @@
 		if (me.mode === 'accounts') { nav.innerHTML = TABS.filter((t) => t[2] !== 'admin' || me.user.role === 'admin').map(tab).join(''); document.getElementById('whoami').innerHTML = `<a href="/account">${(me.user.name || me.user.email).replace(/[<>&"]/g, '')}</a>`; }
 		if (me.user.mustChange && here !== '/account') location.href = '/account';
 		window.PORTAL_ME = me;
+		if (me.mode === 'accounts' && !me.user.mustChange) { const sc = document.createElement('script'); sc.src = '/assets/assistant.js'; document.body.appendChild(sc); }
 	}).catch(() => {});
 })();

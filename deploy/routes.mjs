@@ -1,6 +1,6 @@
 // Express router for the deployment checklist. Mounted at /api/deploy behind the Ops app's sign-in.
 import express from 'express';
-import { STAGES, stageByKey, reqOf, blockedBy, testStage, fixReq, isSatisfied, depMet } from './checks.mjs';
+import { STAGES, stageByKey, reqOf, blockedBy, testStage, fixReq, isSatisfied, depMet, reqsFor, stageSkipped, kindOf } from './checks.mjs';
 import { configured } from './clients.mjs';
 
 const LABELS = { website: 'Website', email: 'Website + Email' };
@@ -12,24 +12,24 @@ export function createDeployRouter({ need, store, clients }) {
 	const cfgFlags = () => configured(clients.cfg);
 	const ctxFor = () => ({ c: clients, configured: cfgFlags(), memo: {}, facts: null, secret: null });
 
-	const stageDone = (stage, results) => stage.reqs.every((q) => isSatisfied(results?.[q.id]?.state));
+	const stageDone = (stage, results, ch) => reqsFor(stage, ch).every((q) => isSatisfied(results?.[q.id]?.state));
 	const view = (c) => {
 		const o = JSON.parse(JSON.stringify(c));
-		o.stageStates = {}; o.guide = {};
+		o.kind = kindOf(o); o.stageStates = {}; o.guide = {};
 		for (const s of STAGES) {
 			const st = o.stages[s.key] || {};
 			o.stageStates[s.key] = { done: !!st.done, results: st.results || null, at: st.at || null, blockedBy: blockedBy(o, s) };
-			o.guide[s.key] = Object.fromEntries(s.reqs.map((q) => [q.id, typeof q.howTo === 'function' ? q.howTo(o, clients.cfg) : q.howTo || '']));
+			o.guide[s.key] = Object.fromEntries(reqsFor(s, o).map((q) => [q.id, typeof q.howTo === 'function' ? q.howTo(o, clients.cfg) : q.howTo || '']));
 		}
 		return o;
 	};
 	const meta = () => STAGES.map((s) => ({
-		key: s.key, n: s.n, title: s.title, blurb: s.blurb, needs: s.needs, onlyPlan: s.onlyPlan || null,
-		reqs: s.reqs.map((q) => ({ id: q.id, label: q.label, manual: !!q.manual, canFix: !!q.fix, fixLabel: q.fixLabel || '', services: q.services || [], deps: q.deps || [], confirm: q.confirm || '' })),
+		key: s.key, n: s.n, title: s.title, blurb: s.blurb, needs: s.needs, onlyPlan: s.onlyPlan || null, onlyKind: s.onlyKind || null,
+		reqs: s.reqs.map((q) => ({ id: q.id, onlyKind: q.onlyKind || null, label: q.label, manual: !!q.manual, canFix: !!q.fix, fixLabel: q.fixLabel || '', services: q.services || [], deps: q.deps || [], confirm: q.confirm || '' })),
 	}));
 	const save = (id, stage, results, ctx, by, note) => store.update(id, (c) => {
 		const st = (c.stages[stage.key] ||= {});
-		st.results = results; st.at = Date.now(); st.done = stageDone(stage, results);
+		st.results = results; st.at = Date.now(); st.done = stageDone(stage, results, c);
 		if (ctx.facts) c.facts[stage.key] = { ...(c.facts[stage.key] || {}), ...ctx.facts };
 	});
 
@@ -39,16 +39,16 @@ export function createDeployRouter({ need, store, clients }) {
 	const summary = (c) => {
 		const counts = {}; let stage = null, next = '';
 		for (const s of STAGES) {
-			const skip = !!(s.onlyPlan && s.onlyPlan !== c.plan), res = c.stages[s.key]?.results || null;
-			const done = skip ? 0 : s.reqs.filter((q) => isSatisfied(res?.[q.id]?.state)).length;
-			counts[s.key] = { total: skip ? 0 : s.reqs.length, done, skip, checked: !!res };
-			if (!stage && !skip && done < s.reqs.length) {
+			const skip = stageSkipped(s, c), res = c.stages[s.key]?.results || null, rq = reqsFor(s, c);
+			const done = skip ? 0 : rq.filter((q) => isSatisfied(res?.[q.id]?.state)).length;
+			counts[s.key] = { total: skip ? 0 : rq.length, done, skip, checked: !!res };
+			if (!stage && !skip && done < rq.length) {
 				stage = s.key;
-				const q = s.reqs.find((x) => !isSatisfied(res?.[x.id]?.state) && res?.[x.id]?.state !== 'blocked') || s.reqs.find((x) => !isSatisfied(res?.[x.id]?.state));
+				const q = rq.find((x) => !isSatisfied(res?.[x.id]?.state) && res?.[x.id]?.state !== 'blocked') || rq.find((x) => !isSatisfied(res?.[x.id]?.state));
 				next = res ? q.label : 'Not checked yet';
 			}
 		}
-		return { id: c.id, name: c.name, domain: c.domain, plan: c.plan, created: c.created, counts, stage, next };
+		return { id: c.id, name: c.name, domain: c.domain, plan: c.plan, kind: kindOf(c), created: c.created, counts, stage, next };
 	};
 	r.get('/churches', (req, res) => res.json(store.list().map(summary)));
 
@@ -73,6 +73,7 @@ export function createDeployRouter({ need, store, clients }) {
 					c.domain = d;
 				}
 				if (b.plan !== undefined) c.plan = b.plan === 'email' ? 'email' : 'website';
+				if (b.kind !== undefined) c.kind = b.kind === 'migration' ? 'migration' : 'new';
 				if (b.contactEmail !== undefined) c.contactEmail = String(b.contactEmail).trim().slice(0, 120);
 				if (b.notes !== undefined) c.notes = String(b.notes).slice(0, 2000);
 				if (b.mailboxes !== undefined) c.mailboxes = [...new Set(String(Array.isArray(b.mailboxes) ? b.mailboxes.join(',') : b.mailboxes).split(/[\s,;]+/).map((x) => x.toLowerCase().replace(/[^a-z0-9._-]/g, '')).filter(Boolean))].slice(0, 10);
@@ -113,7 +114,7 @@ export function createDeployRouter({ need, store, clients }) {
 			const c = store.update(req.params.id, (c) => {
 				const st = (c.stages[s.key] ||= {}); (st.manual ||= {})[id] = !!value;
 				st.results = { ...(st.results || {}), [id]: { state: value ? 'ok' : 'no', detail: value ? 'Ticked.' : '' } };
-				st.done = stageDone(s, st.results);
+				st.done = stageDone(s, st.results, c);
 			});
 			store.log(req.params.id, req.by, `${s.title}: "${q.label}" ${value ? 'ticked' : 'unticked'}`);
 			res.json(view(c));
@@ -141,13 +142,13 @@ export function createDeployRouter({ need, store, clients }) {
 		if (!ch) return res.status(404).json({ error: 'Church not found' });
 		if (b.confirm !== true) return res.status(400).json({ error: 'Confirm first.' });
 		const blocked = blockedBy(ch, s);
-		if (blocked.length) return res.status(409).json({ error: 'Not ready: ' + blocked.map((x) => (x === 'plan' ? 'this stage is only for the Website + Email plan' : 'finish "' + stageByKey(x).title + '" first')).join('; ') });
+		if (blocked.length) return res.status(409).json({ error: 'Not ready: ' + blocked.map((x) => (x === 'plan' ? 'this stage is only for the Website + Email plan' : x === 'kind' ? 'this stage does not apply to this type of customer' : 'finish "' + stageByKey(x).title + '" first')).join('; ') });
 		if (busy.has(id)) return res.status(409).json({ error: 'Another action is running for this church. Try again in a moment.' });
 		busy.add(id);
 		const ctx = ctxFor(), fixed = [];
 		try {
 			let results = await testStage(ctx, ch, s);
-			const targets = b.req === 'all' ? s.reqs.filter((q) => q.fix && !q.confirm) : [reqOf(s, b.req)].filter(Boolean);
+			const targets = b.req === 'all' ? reqsFor(s, ch).filter((q) => q.fix && !q.confirm) : [reqOf(s, b.req)].filter(Boolean);
 			if (!targets.length) return res.status(400).json({ error: 'Nothing to fix.' });
 			for (const q of targets) {
 				const cur = results[q.id];

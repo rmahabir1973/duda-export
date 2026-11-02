@@ -562,16 +562,46 @@ export const STAGES = [
 			manual('stripe', 'Is the subscription recorded in Stripe with their name and domain?', 'Check Stripe, then tick.'),
 			manual('backups', 'Is the site covered by Hostinger\'s nightly backup?', 'hPanel → Backups. Then tick.'),
 			manual('monitor', 'Is the site in uptime monitoring?', 'Add it to your monitor. Then tick.'),
+			{ ...manual('dudaRetire', 'Has the old DUDA site been unpublished, about two weeks after we went live?', 'Leave it up for about two weeks after going live, then unpublish the old site in DUDA once the new one has run smoothly. Then tick.'), onlyKind: 'migration' },
+			{ ...manual('dudaBilling', 'Is the church\'s DUDA plan cancelled or removed from our DUDA bill?', 'Check the DUDA account, then tick.'), onlyKind: 'migration' },
 		],
 	},
+	/* ============================================================ prospect (new sites only) */
+	{
+		key: 'sales', n: 0, title: 'Prospect and agreement', needs: [], onlyKind: 'new',
+		blurb: 'For a church that is new to us. Nothing technical happens here: it records that we have spoken, who the contact is, and that they want to see a preview.',
+		reqs: [
+			{ id: 'contact', label: 'Do we have a contact person\'s email?', test: async (ctx, ch) => (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(ch.contactEmail || '').trim()) ? ok(ch.contactEmail) : no('Add the contact\'s email under Customer details.')) },
+			manual('spoken', 'Have we been in touch with the church (a reply, a call or a meeting)?', 'Tick this once someone from the church has responded to us.'),
+			manual('needs', 'Do we know what they want (new site, hosting, email, who updates it)?', 'Write what you learn in the notes under Customer details, then tick.'),
+			manual('go', 'Has the church said yes to a free preview?', 'Tick this when they agree. The next phases build the preview site.'),
+		],
+	},
+
+	/* ============================================================ move content from DUDA (migrations only) */
+	{
+		key: 'migrate', n: 0, title: 'Move the content from DUDA', needs: ['preview'], onlyKind: 'migration',
+		blurb: 'For a church that is already on DUDA. The old site stays live and untouched until the domain is switched.',
+		reqs: [
+			manual('dudasite', 'Have we found the church\'s site in DUDA (name or site ID)?', 'Find it in DUDA and note the site name in the notes under Customer details, then tick.'),
+			manual('exported', 'Has the content been exported from DUDA?', 'Use the Exporter tab with their DUDA site address, then tick.'),
+			manual('imported', 'Is the content in the new WordPress site?', 'Pages, posts, images and menus. Then tick.'),
+			manual('parity', 'Do pages, forms, menus and old web addresses match the old site?', 'Compare the two sites side by side. List any old addresses that need a redirect, add them, then tick.'),
+		],
+	},
+
 ];
 
 /** The order a customer moves through. */
-const ORDER = ['dnscheck', 'cloudflare', 'preview', 'approval', 'dns', 'golive', 'mailboxes', 'sending', 'handover'];
+const ORDER = ['sales', 'dnscheck', 'cloudflare', 'preview', 'migrate', 'approval', 'dns', 'golive', 'mailboxes', 'sending', 'handover'];
 STAGES.sort((a, b) => ORDER.indexOf(a.key) - ORDER.indexOf(b.key));
 STAGES.forEach((st, i) => { st.n = i + 1; });
 
 export const stageByKey = (k) => STAGES.find((s) => s.key === k);
+/** A customer is either a 'new' site (prospect) or a 'migration' from DUDA. Older records have no kind and count as new. */
+export const kindOf = (ch) => (ch && ch.kind === 'migration' ? 'migration' : 'new');
+export const reqsFor = (stage, ch) => stage.reqs.filter((q) => !q.onlyKind || q.onlyKind === kindOf(ch));
+export const stageSkipped = (stage, ch) => !!((stage.onlyPlan && stage.onlyPlan !== ch.plan) || (stage.onlyKind && stage.onlyKind !== kindOf(ch)));
 export const reqOf = (stage, id) => stage.reqs.find((r) => r.id === id);
 const manualDone = (ch, stage, id) => !!ch.stages[stage.key]?.manual?.[id];
 const missingServices = (ctx, req) => (req.services || []).filter((s) => !ctx.configured[s]);
@@ -581,13 +611,14 @@ export function blockedBy(ch, stage) {
 	const out = [];
 	for (const need of stage.needs) if (!ch.stages[need]?.done) out.push(need);
 	if (stage.onlyPlan && ch.plan !== stage.onlyPlan) out.push('plan');
+	if (stage.onlyKind && stage.onlyKind !== kindOf(ch)) out.push('kind');
 	return out;
 }
 
 /** Test every requirement of a stage, in order. Returns {id: {state, detail}}. A requirement whose prerequisite is not met is "blocked" and is not tested. */
 export async function testStage(ctx, ch, stage) {
 	const out = {};
-	for (const req of stage.reqs) {
+	for (const req of reqsFor(stage, ch)) {
 		const unmet = (req.deps || []).filter((d) => !depMet(out[d]?.state));
 		if (unmet.length) { out[req.id] = R('blocked', 'Waiting for: ' + unmet.map((d) => reqOf(stage, d).label.replace(/\?$/, '')).join('; ')); continue; }
 		if (req.manual) { out[req.id] = manualDone(ch, stage, req.id) ? ok('Ticked.') : no(''); continue; }

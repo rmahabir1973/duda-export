@@ -13,6 +13,12 @@ import { createDeployRouter } from './deploy/routes.mjs';
 import { createEmailRouter } from './deploy/emailroutes.mjs';
 import { connectDb, migrate } from './portal/db.mjs';
 import { createPortal } from './portal/routes.mjs';
+import { createLoops } from './portal/loops.mjs';
+import { createOutreach } from './portal/outreach.mjs';
+import { outreachRouter, loopsWebhook } from './portal/outreachRoutes.mjs';
+import { buildTools } from './portal/assistantTools.mjs';
+import { createAssistant } from './portal/assistant.mjs';
+import { assistantRouter } from './portal/assistantRoutes.mjs';
 import { createAccessGuard } from './portal/access.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -227,12 +233,12 @@ cleanup();
 setInterval(cleanup, 30 * 60 * 1000).unref();
 
 /* ---------------------------------------------------------------- accounts + database (optional: falls back to the single password) */
-let portal = null;
+let portal = null, portalDb = null;
 const dbUrl = (env.NEON_DATABASE_URL || env.DATABASE_URL || '').trim();
 if (dbUrl) {
 	try {
 		const db = await connectDb(dbUrl);
-		await migrate(db);
+		await migrate(db); portalDb = db;
 		if (!env.PORTAL_ENC_KEY) console.warn('portal: PORTAL_ENC_KEY is not set, so the 2FA secrets are encrypted with a key derived from SESSION_SECRET / APP_PASSWORD. Set PORTAL_ENC_KEY (a long random value) in Railway and never change it.');
 		portal = await createPortal({ db, sessionHours: SESSION_HOURS, apiToken: API_TOKEN, bootstrapPassword: APP_PASSWORD, requireTwoFactor: env.REQUIRE_2FA !== '0', encryptionKey: env.PORTAL_ENC_KEY || SESSION_SECRET, hooks: { locked: (ip) => locked(ip), noteFail: (ip) => noteFail(ip), clearFail: (ip) => fails.delete(ip) } });
 		console.log(`portal: database connected, user accounts are on, two-factor ${env.REQUIRE_2FA === '0' ? 'OFF (REQUIRE_2FA=0)' : 'required'}`);
@@ -240,11 +246,17 @@ if (dbUrl) {
 	} catch (e) { console.error('portal: database not available, using the single password login instead:', e.message); }
 } else console.log('portal: no DATABASE_URL, using the single password login');
 
+/* prospect outreach through Loops (needs the database) */
+const loops = createLoops({ apiKey: (env.LOOPS_API_KEY || '').trim() });
+const LOOPS_WEBHOOK_SECRET = (env.LOOPS_WEBHOOK_SECRET || '').trim();
+const outreach = portal && portalDb ? createOutreach({ db: portalDb, dir: portal.dir, loops, audit: portal.audit, eventName: (env.LOOPS_OUTREACH_EVENT || 'prospect_outreach').trim(), dailyCap: env.OUTREACH_DAILY_CAP ?? 25 }) : null;
+if (outreach) console.log(`outreach: Loops ${loops.available() ? 'connected' : 'NOT configured (LOOPS_API_KEY)'}, daily cap ${outreach.cap}, webhook ${LOOPS_WEBHOOK_SECRET ? 'secret set' : 'secret missing'}`);
+
 /* ---------------------------------------------------------------- web */
 const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
-if (env.CF_ACCESS_TEAM_DOMAIN && env.CF_ACCESS_AUD) { app.use(createAccessGuard({ teamDomain: env.CF_ACCESS_TEAM_DOMAIN.replace(/^https?:\/\//, '').replace(/\/$/, ''), aud: env.CF_ACCESS_AUD })); console.log('portal: only requests that passed Cloudflare Access are accepted'); }
+if (env.CF_ACCESS_TEAM_DOMAIN && env.CF_ACCESS_AUD) { app.use(createAccessGuard({ teamDomain: env.CF_ACCESS_TEAM_DOMAIN.replace(/^https?:\/\//, '').replace(/\/$/, ''), aud: env.CF_ACCESS_AUD, exempt: ['/healthz', '/webhooks/loops'] })); console.log('portal: only requests that passed Cloudflare Access are accepted'); }
 app.use((req, res, next) => {
 	if (req.secure) res.set('Strict-Transport-Security', 'max-age=63072000; includeSubDomains');
 	res.set({
@@ -260,6 +272,8 @@ app.use((req, res, next) => {
 	next();
 });
 app.get('/healthz', (req, res) => res.type('text').send('ok'));
+if (outreach) app.post('/webhooks/loops', ...loopsWebhook({ outreach, secret: LOOPS_WEBHOOK_SECRET })); // signed by Loops, checked on the raw body
+app.use('/api/assistant', express.json({ limit: '300kb' }));
 app.use(express.json({ limit: '20kb' }));
 if (portal) { app.use(portal.attach); app.use(portal.auditChanges); }
 app.use('/assets', express.static(path.join(__dirname, 'public'), { index: false }));
@@ -322,8 +336,14 @@ if (!portal) app.post('/logout', (req, res) => {
 });
 
 const deployClients = makeClients(configFromEnv(env));
-app.use('/api/deploy', createDeployRouter({ need, store: createStore(path.join(DATA_DIR, 'deploy')), clients: deployClients }));
+const deployStore = createStore(path.join(DATA_DIR, 'deploy'));
+app.use('/api/deploy', createDeployRouter({ need, store: deployStore, clients: deployClients }));
 app.use('/api/email', createEmailRouter({ need, clients: deployClients }));
+if (portal) {
+	const assistant = createAssistant({ tools: buildTools({ store: deployStore, clients: deployClients, dir: portal.dir, outreach, audit: portal.audit }), audit: portal.audit, clients: deployClients, env });
+	app.use('/api/assistant', assistantRouter({ need, assistant }));
+}
+if (outreach) app.use('/api/outreach', outreachRouter({ need, outreach, loops, webhookSecret: LOOPS_WEBHOOK_SECRET }));
 app.get('/email', page('email.html'));
 app.get('/deploy', page('deploy.html'));
 app.get('/directory', page('directory.html', { dbOnly: true }));

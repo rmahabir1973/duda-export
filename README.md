@@ -174,3 +174,21 @@ Railway: Settings, Networking, add custom domain `portal.churchwebglobal.com`, t
 
 ### Directory
 Directory tab: import the exported CSV once under "Manage data". Customers are matched by website or email domain against the customer-domain list.
+
+## v7.1: customer types, prospect email (Loops), and the portal assistant
+
+### Customer types
+Every customer is either a **New site** (a prospect: stages start with Prospect and agreement) or **From DUDA** (adds "Move the content from DUDA" after the preview, and "retire the DUDA site / cancel DUDA" at handover). Pick the type when adding a customer; it can be changed under Customer details. Older customers count as New site. On the Directory, **＋ Prospect** adds a church to the board with its email and notes filled in.
+
+### Prospect email through Loops
+Set in Railway: `LOOPS_API_KEY`, `LOOPS_WEBHOOK_SECRET` (below), and optionally `LOOPS_OUTREACH_EVENT` (default `prospect_outreach`) and `OUTREACH_DAILY_CAP` (default 25, hard maximum 200).
+
+One-time setup in Loops:
+1. Add contact properties `churchName`, `city`, `province` (Settings, Contact properties). Add event properties `churchName` and `city` if you want them in the email.
+2. Create a **Loop** that starts on the event `prospect_outreach` and sends the intro email. Use the Loops unsubscribe link and put the company name and address in the footer.
+3. Settings, Webhooks: endpoint `https://portal.churchwebglobal.com/webhooks/loops`, tick the email and contact events (delivered, opened, clicked, bounced, unsubscribed, spam reported), and copy the signing secret (`whsec_...`) into `LOOPS_WEBHOOK_SECRET`.
+
+Sending: Directory, filter, "Email these churches", Preview, type the exact number, Send. Customers, bounced/unsubscribed/complaint addresses, anyone emailed in the last 60 days (same campaign) and duplicate addresses are always skipped. Loops reports back through the webhook, which fills the stats and the do-not-contact list. The webhook path is the only unauthenticated one: it is exempt from Cloudflare Access and accepts only requests signed by Loops (checked on the raw body, 5 minute window).
+
+### The portal assistant
+A chat panel on every page (needs `GATEWAY_ADMIN_KEY`, which it uses to get its own gateway token for the site id `portal`, or `ANTHROPIC_API_KEY` to call Anthropic directly; `PORTAL_AI_MODEL` overrides the model). It can read customers, run checks, check email DNS, search the directory and see outreach results. It can **propose** changes (fix one task, change a mailbox password, set outreach status, add a prospect); each shows an Approve card and nothing runs until a person approves it. New passwords are generated server-side and shown once to the person, never to the AI. Every approved or declined change is in the Activity log. Mailbox passwords are changed through the SmarterMail API and confirmed by signing in with the new password; if SmarterMail does not accept the API call the assistant says so and nothing changes.

@@ -1,6 +1,6 @@
 // The United Church of Canada directory: import a CSV, search and filter it, export it, and match it against our customers.
 const FREE_MAIL = new Set(['gmail.com', 'hotmail.com', 'outlook.com', 'yahoo.com', 'yahoo.ca', 'live.com', 'live.ca', 'icloud.com', 'me.com', 'aol.com', 'msn.com', 'sympatico.ca', 'bell.net', 'rogers.com', 'shaw.ca', 'telus.net', 'eastlink.ca', 'cogeco.ca', 'videotron.ca', 'sasktel.net', 'mts.net', 'nbnet.nb.ca', 'bellnet.ca', 'xplornet.ca', 'execulink.com']);
-export const STATUSES = ['new', 'to contact', 'contacted', 'replied', 'not interested', 'customer'];
+export const STATUSES = ['new', 'to contact', 'contacted', 'replied', 'not interested', 'do not contact', 'customer'];
 
 /** Minimal RFC 4180 CSV reader: quoted fields, doubled quotes, commas and newlines inside quotes, CRLF, BOM. */
 export function parseCsv(text) {
@@ -98,6 +98,7 @@ export function createDirectory(db) {
 			const rows = await db.query(`select id, name, type, address, city, province, postal, phone, email, website, pastoral_charge, regional_council, is_customer, outreach_status, notes from directory ${sql} order by ${sort} ${dir}, id limit ${lim} offset ${off}`, p);
 			return { total, rows };
 		},
+		async _byId(id) { return (await db.query('select id, name, city, province, email, website from directory where id = $1', [id]))[0] || null; },
 		async exportRows(f = {}) {
 			const { sql, p } = self._where(f);
 			return db.query(`select name, type, address, address2, city, province, postal, phone, email, website, is_customer, outreach_status, notes, pastoral_charge, regional_council, source from directory ${sql} order by lower(name), id`, p);
