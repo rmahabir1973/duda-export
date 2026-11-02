@@ -115,7 +115,7 @@ function rowHtml(s, q, blockedStage) {
 	const showHow = how && ['no', 'unknown', 'error'].includes(st) && !(q.canFix && !m?.howTo);
 	return `<li class="req ${st}"><span class="ri ${st}">${ICON[st] || ''}</span>
 		<div class="rb"><div class="rl">${esc(q.label)}</div>${detail ? `<div class="rd">${esc(detail)}</div>` : ''}
-		${m ? `<div class="rm ${m.ok ? 'good' : 'bad'}">${esc(m.detail || (m.ok ? 'Done.' : ''))}${m.unavailable ? `<div class="hint">Not set up on this server: ${m.unavailable.map((x) => esc(SERVICE[x] || x)).join(', ')}.</div>` : ''}${m.howTo ? `<pre>${esc(m.howTo)}</pre>` : ''}</div>` : ''}
+		${m && !(m.detail && m.detail === detail) ? `<div class="rm ${m.ok ? 'good' : 'bad'}">${esc(m.detail || (m.ok ? 'Done.' : ''))}${m.unavailable ? `<div class="hint">Not set up on this server: ${m.unavailable.map((x) => esc(SERVICE[x] || x)).join(', ')}.</div>` : ''}${m.howTo ? `<pre>${esc(m.howTo)}</pre>` : ''}</div>` : ''}
 		${showHow ? `<div class="hint"><a href="#" data-how="${s.key}.${q.id}">How to do this by hand</a></div>${openHow[s.key + '.' + q.id] ? `<pre class="how">${esc(how)}</pre>` : ''}` : ''}</div>
 		<div class="ra">${action}</div></li>`;
 }

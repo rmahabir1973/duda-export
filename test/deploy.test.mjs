@@ -450,3 +450,17 @@ test('deleting a customer: needs the short name; can also remove their preview s
 		assert.equal(r.s, 200); assert.equal(f.calls.hst.length, before);
 	} finally { t.close(); }
 });
+
+test('"fix everything" keeps going past a failed fix; only the items that depend on it wait', async () => {
+	const f = fakes({ wp: { activePlugins: ['churchweb-ai-assistant', 'oxygen', 'seo-by-rank-math'], active: true } }); const t = await app(f);
+	f.c.gateway.mint = async () => { throw new Error('Gateway: Not found'); };
+	try {
+		await t.j('/churches', 'POST', { name: 'Grace Church', domain: 'grace.org' });
+		const r = await t.j('/churches/grace-church/stages/preview/fix', 'POST', { req: 'all', confirm: true });
+		const st = states(r.j.church.stageStates.preview.results);
+		assert.equal(st.connected, 'error', 'the gateway problem is reported');
+		assert.equal(st.title, 'ok'); assert.equal(st.address, 'ok'); assert.equal(st.dns, 'ok');
+		assert.equal(st.preview, 'ok', 'preview mode was still fixed');
+		assert.equal(r.j.fixed.find((x) => x.id === 'connected').ok, false);
+	} finally { t.close(); }
+});

@@ -157,7 +157,8 @@ export function createDeployRouter({ need, store, clients }) {
 				const out = await fixReq(ctx, ch, s, q, cur);
 				fixed.push({ id: q.id, ok: !!out.ok, detail: out.detail || '', howTo: out.howTo || '', unavailable: out.unavailable || undefined });
 				store.log(id, req.by, `${s.title}: ${q.label} → ${out.ok ? 'fixed' : 'could not fix'}`, out.ok ? 'info' : 'warn');
-				if (out.ok) { ctx.memo = {}; results = await testStage(ctx, store.get(id), s); } else if (b.req === 'all') break;
+				if (out.ok) { ctx.memo = {}; results = await testStage(ctx, store.get(id), s); }
+				// a failed fix doesn't stop the independent ones: anything that depends on it simply keeps waiting
 			}
 			const c = save(id, s, results, ctx, req.by);
 			res.json({ fixed, secret: ctx.secret || undefined, church: view(c) });
