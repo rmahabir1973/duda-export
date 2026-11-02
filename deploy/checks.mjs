@@ -105,6 +105,10 @@ const isOurSite = async (ctx, d) => {
 	const r = await ctx.c.http.get(`https://${d}/wp-json/`);
 	return { status: r.status, ours: r.status === 200 && /"namespaces"/.test(r.text || ''), error: r.error };
 };
+const lines = (t) => String(t || '').split('\n').map((x) => x.trim()).filter(Boolean);
+const tplHostOf = (cfg) => `${cfg.templateSlug}.${cfg.previewDomain}`;
+const siteRecord = async (ctx, host) => (await ctx.c.hostinger.websites()).find((w) => w.domain === host) || null;
+const needApi = (ctx) => (ctx.c.hostinger.available() ? null : unk('Can\'t look: the Hostinger API key isn\'t set up on this server.'));
 const manual = (id, label, howTo) => ({ id, label, manual: true, howTo });
 
 /* ------------------------------------------------------------------ the stages */
@@ -115,13 +119,36 @@ export const STAGES = [
 		blurb: 'A temporary copy of the new website at its own address, hidden from search engines, so the church can look at it.',
 		reqs: [
 			{
-				id: 'folder', label: 'Is the preview site created on Hostinger?', services: ['ssh'], deps: [],
+				id: 'site', label: 'Is the preview site created on Hostinger?', services: ['hostingerApi'], deps: [], fixLabel: 'Create the site',
+				async test(ctx, ch) {
+					const na = needApi(ctx); if (na) return na;
+					const host = tempHost(ch, ctx.c.cfg), w = await siteRecord(ctx, host);
+					return w ? ok(`Created on Hostinger (${w.website_type || 'site'}).`) : no(`${host} doesn't exist on Hostinger yet.`);
+				},
+				async fix(ctx, ch) {
+					const host = tempHost(ch, ctx.c.cfg), acct = await ctx.c.hostinger.account();
+					await ctx.c.hostinger.createWebsite(host, acct.order_id);
+					return { ok: true, detail: `Hostinger is creating ${host}. This takes a minute or two: press Re-check.` };
+				},
+				howTo: (ch, cfg) => `In Hostinger (hPanel → Websites → Create site), add the address ${tempHost(ch, cfg)}. Then press Re-check.`,
+			},
+			{
+				id: 'folder', label: 'Is WordPress installed on it?', services: ['hostingerApi'], deps: ['site'], fixLabel: 'Install WordPress',
 				async test(ctx, ch) {
 					const s = await siteOf(ctx, ch);
 					if (s.unavailable) return unk('Can\'t look: Hostinger SSH isn\'t set up on this server yet.');
-					return s.missing ? no(`No WordPress site found for ${tempHost(ch, ctx.c.cfg)}.`) : ok(s.host);
+					return s.missing ? no(`No WordPress found in ${tempHost(ch, ctx.c.cfg)} yet.`) : ok(s.host);
 				},
-				howTo: (ch, cfg) => `In Hostinger (hPanel → Websites), create the address ${tempHost(ch, cfg)} and put a fresh WordPress in it. Then press Re-check.`,
+				async fix(ctx, ch) {
+					const cfg = ctx.c.cfg, host = tempHost(ch, cfg), email = ch.contactEmail || cfg.wpAdminEmail;
+					if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email || '')) return { ok: false, detail: 'WordPress needs an admin email. Enter the church contact\'s email at the top of this page (or set WP_ADMIN_EMAIL in Railway).' };
+					const w = await siteRecord(ctx, host); if (!w) return { ok: false, detail: 'The site doesn\'t exist on Hostinger yet.' };
+					const password = randomPassword(18), login = 'cwadmin';
+					await ctx.c.hostinger.installWordPress(w.username, { domain: host, site_title: ch.name, credentials: { email, login, password } });
+					ctx.secret = { login, password, email, url: `https://${host}/wp-admin` };
+					return { ok: true, detail: 'Hostinger is installing WordPress (a minute or two). The login for the new site is shown once below: copy it. Then press Re-check.' };
+				},
+				howTo: (ch, cfg) => `In Hostinger (hPanel → ${tempHost(ch, cfg)} → WordPress), install WordPress. Then press Re-check.`,
 			},
 			{
 				id: 'dns', label: 'Does the preview address reach our server?', services: ['previewDns'], deps: [], fixLabel: 'Add the DNS record',
@@ -138,7 +165,28 @@ export const STAGES = [
 				howTo: (ch, cfg) => `In Cloudflare, add an A record for ${tempHost(ch, cfg)} pointing at the Hostinger IP (or use a wildcard record for *.${cfg.previewDomain}).`,
 			},
 			{
-				id: 'plugin', label: 'Is the ChurchWeb AI Assistant plugin active?', services: ['ssh'], deps: ['folder'], fixLabel: 'Activate it',
+				id: 'plugins', label: 'Does the site have the same plugins as our template?', services: ['ssh'], deps: ['folder'], fixLabel: 'Copy our plugins',
+				test: (ctx, ch) => onSite(ctx, ch, async (h) => {
+					const tpl = tplHostOf(ctx.c.cfg);
+					if (!(await findRoot(ctx, tpl))) return unk(`The template site (${tpl}) wasn't found on Hostinger.`);
+					const want = lines(await wpGet(ctx, tpl, 'plugin list --status=active --field=name')), have = lines(await wpGet(ctx, h, 'plugin list --status=active --field=name'));
+					const missing = want.filter((x) => !have.includes(x));
+					return missing.length ? no(`Missing: ${missing.join(', ')}`) : ok(`${want.length} plugins, same as the template.`);
+				}),
+				fix: (ctx, ch) => fixOnSite(ctx, ch, [`# copy each active plugin folder from the template site's wp-content/plugins, then: wp plugin activate <names>`], async (h) => {
+					const cfg = ctx.c.cfg, tpl = tplHostOf(cfg);
+					if (!(await findRoot(ctx, tpl))) return { ok: false, detail: `The template site (${tpl}) wasn't found on Hostinger.` };
+					const want = lines(await wpGet(ctx, tpl, 'plugin list --status=active --field=name')), have = lines(await wpGet(ctx, h, 'plugin list --status=active --field=name'));
+					const missing = want.filter((x) => !have.includes(x) && /^[A-Za-z0-9._-]+$/.test(x));
+					const from = sitePath(cfg, tpl), to = sitePath(cfg, h), failed = [];
+					for (const n of missing) { const r = await ctx.c.ssh.exec(`[ -d ${from}/wp-content/plugins/${n} ] && { [ -d ${to}/wp-content/plugins/${n} ] || cp -a ${from}/wp-content/plugins/${n} ${to}/wp-content/plugins/; }`); if (r.code) failed.push(n); }
+					const todo = missing.filter((n) => !failed.includes(n));
+					if (todo.length) { const a = await wpRun(ctx, h, `plugin activate ${todo.map(shq).join(' ')}`); if (a.code) return { ok: false, detail: (a.err || a.out).trim().slice(-300) }; }
+					return { ok: !failed.length, detail: `Copied and activated ${todo.length} plugin(s).${failed.length ? ' Couldn\'t copy: ' + failed.join(', ') : ''} Oxygen still needs its licence key (tick below).` };
+				}),
+			},
+			{
+				id: 'plugin', label: 'Is the ChurchWeb AI Assistant plugin active?', services: ['ssh'], deps: ['folder', 'plugins'], fixLabel: 'Activate it',
 				test: (ctx, ch) => onSite(ctx, ch, async (h) => ((await wpRun(ctx, h, 'plugin is-active churchweb-ai-assistant')).code === 0 ? ok() : no('The plugin isn\'t active on this site.'))),
 				fix: (ctx, ch) => fixOnSite(ctx, ch, [handCmd(ctx, ch, 'plugin activate churchweb-ai-assistant')], async (h) => {
 					const r = await wpRun(ctx, h, 'plugin activate churchweb-ai-assistant');
@@ -313,17 +361,29 @@ export const STAGES = [
 		blurb: 'Make the preview site answer on the church\'s real domain, turn preview mode off, and check everything.',
 		reqs: [
 			{
-				id: 'added', label: 'Does the real domain show our new site?', services: [], deps: [],
+				id: 'added', label: 'Does the real domain show our new site?', services: ['hostingerApi'], deps: [], fixLabel: 'Add the domain to the site',
 				async test(ctx, ch) {
 					if (!ch.domain) return noDomain();
 					const r = await isOurSite(ctx, ch.domain);
 					return r.ours ? ok(`https://${ch.domain} is our WordPress site.`) : no(r.status ? `https://${ch.domain} answers, but it isn't our new site yet (it may still be the old one).` : `https://${ch.domain} doesn't answer (${r.error || 'no response'}).`);
 				},
+				async fix(ctx, ch) {
+					const host = tempHost(ch, ctx.c.cfg), w = await siteRecord(ctx, host);
+					if (!w) return { ok: false, detail: 'The preview site doesn\'t exist on Hostinger.' };
+					await ctx.c.hostinger.addParkedDomain(w.username, host, ch.domain);
+					return { ok: true, detail: `Added ${ch.domain} to the site. The domain must already point at Hostinger (stage 4). Hostinger needs a few minutes: press Re-check.` };
+				},
 				howTo: (ch) => `In Hostinger (hPanel → Websites → the church's site → Domains), add ${ch.domain || 'the domain'} and set it as primary. Then press Re-check.`,
 			},
 			{
-				id: 'ssl', label: 'Is the security certificate (https) valid?', deps: ['added'],
+				id: 'ssl', label: 'Is the security certificate (https) valid?', services: ['hostingerApi'], deps: ['added'], fixLabel: 'Issue the certificate',
 				async test(ctx, ch) { const c = await ctx.c.tls(ch.domain); return c.authorized ? ok('Valid until ' + c.validTo) : no('Certificate problem: ' + (c.error || 'unknown')); },
+				async fix(ctx, ch) {
+					const host = tempHost(ch, ctx.c.cfg), w = await siteRecord(ctx, host);
+					if (!w) return { ok: false, detail: 'The site doesn\'t exist on Hostinger.' };
+					try { await ctx.c.hostinger.installSsl(w.username, ch.domain); } catch (e) { await ctx.c.hostinger.installSsl(w.username, host); }
+					return { ok: true, detail: 'Asked Hostinger to issue the certificate. It can take a few minutes: press Re-check.' };
+				},
 				howTo: () => 'In Hostinger (hPanel → SSL), issue or renew the certificate for the domain. This can take a few minutes after adding the domain.',
 			},
 			{

@@ -95,6 +95,10 @@ The "Batch of prospects" card takes up to 40 churches at a time, one per line: `
 
 ## Deploy a church
 
+Each customer is a **project**. The Deploy page opens on a **board**: one column per phase (Preview site → Review & approval → Domain & DNS → Go live → Email → Handover → Done), one card per customer showing progress and the next task. Add a customer when they sign up; open the card for their project page, which has a tab per phase with that phase's tasks.
+
+**Hostinger is driven through its API** (`HOSTINGER_API_KEY`): create the preview site, install WordPress, add the church's real domain to the site (parked domain) and issue the certificate. Plugins are copied from the template site over SSH. Optional: `WP_ADMIN_EMAIL` (WordPress admin email when the customer has no contact email yet).
+
 Open **Deploy a church** (top right of the Exporter). Add a church (name, optional current website, plan). The page shows eight stages. Each stage is a short list of plain questions, checked live:
 
 - ✔ **yes**: nothing to do.

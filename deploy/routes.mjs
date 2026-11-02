@@ -35,7 +35,22 @@ export function createDeployRouter({ need, store, clients }) {
 
 	r.get('/config', (req, res) => res.json({ configured: cfgFlags(), plans: LABELS, stages: meta(), previewDomain: clients.cfg.previewDomain, templateSlug: clients.cfg.templateSlug }));
 
-	r.get('/churches', (req, res) => res.json(store.list().map((c) => ({ id: c.id, name: c.name, domain: c.domain, plan: c.plan, created: c.created, stages: Object.fromEntries(STAGES.map((s) => [s.key, !!c.stages[s.key]?.done])) }))));
+	/** One line per customer for the board: how far along each stage is, which stage they are in, and the next thing to do. */
+	const summary = (c) => {
+		const counts = {}; let stage = null, next = '';
+		for (const s of STAGES) {
+			const skip = !!(s.onlyPlan && s.onlyPlan !== c.plan), res = c.stages[s.key]?.results || null;
+			const done = skip ? 0 : s.reqs.filter((q) => isSatisfied(res?.[q.id]?.state)).length;
+			counts[s.key] = { total: skip ? 0 : s.reqs.length, done, skip, checked: !!res };
+			if (!stage && !skip && done < s.reqs.length) {
+				stage = s.key;
+				const q = s.reqs.find((x) => !isSatisfied(res?.[x.id]?.state) && res?.[x.id]?.state !== 'blocked') || s.reqs.find((x) => !isSatisfied(res?.[x.id]?.state));
+				next = res ? q.label : 'Not checked yet';
+			}
+		}
+		return { id: c.id, name: c.name, domain: c.domain, plan: c.plan, created: c.created, counts, stage, next };
+	};
+	r.get('/churches', (req, res) => res.json(store.list().map(summary)));
 
 	r.post('/churches', (req, res) => {
 		try { res.json(view(store.create(req.body || {}, req.by))); } catch (e) { res.status(400).json({ error: e.message }); }

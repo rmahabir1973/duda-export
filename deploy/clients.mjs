@@ -53,7 +53,7 @@ export function configFromEnv(env = process.env) {
 		sshKey: (env.SSH_PRIVATE_KEY || '').replace(/\\n/g, '\n'), sshPassphrase: env.SSH_PASSPHRASE || '',
 		siteRoot: env.SITE_ROOT || '$HOME/domains/{host}/public_html',
 		wpCli: env.WP_CLI || 'wp',
-		hostingerApiBase: (env.HOSTINGER_API_BASE || 'https://developers.hostinger.com').replace(/\/$/, ''), hostingerApiKey: clean(env.HOSTINGER_API_KEY),
+		wpAdminEmail: clean(env.WP_ADMIN_EMAIL), hostingerApiBase: (env.HOSTINGER_API_BASE || 'https://developers.hostinger.com').replace(/\/$/, ''), hostingerApiKey: clean(env.HOSTINGER_API_KEY),
 		smartermailUrl: (() => { const u = clean(env.SMARTERMAIL_URL); return u ? (/^https?:\/\//i.test(u) ? u : 'https://' + u).replace(/\/$/, '') : ''; })(),
 		smartermailUser: clean(env.SMARTERMAIL_ADMIN_USER), smartermailPassword: String(env.SMARTERMAIL_ADMIN_PASSWORD || '').trim(),
 		smartermailDomainPath: env.SMARTERMAIL_DOMAIN_PATH || 'C:\\SmarterMail\\Domains\\{domain}', smartermailDomainAdmin: env.SMARTERMAIL_DOMAIN_ADMIN || 'postmaster',
@@ -228,10 +228,24 @@ export function makeClients(cfg, deps = {}) {
 		s.on('error', (e) => resolve({ open: false, error: e.code || e.message }));
 	}));
 
-	/** Hostinger's hosting API (https://developers.hostinger.com). Read calls only for now. */
+	/** Hostinger's hosting API (https://developers.hostinger.com). */
 	const hostinger = {
 		available: () => !!cfg.hostingerApiKey,
 		async get(path) { return req(f, cfg.hostingerApiBase + path, { headers: { authorization: 'Bearer ' + cfg.hostingerApiKey } }); },
+		async call(method, path, body) {
+			const r = await req(f, cfg.hostingerApiBase + path, { method, headers: { authorization: 'Bearer ' + cfg.hostingerApiKey }, body });
+			if (!r.ok) throw new Error('Hostinger: ' + errText(r, r.status === 401 || r.status === 403 ? 'check HOSTINGER_API_KEY and its permissions' : ''));
+			return r.data;
+		},
+		async websites() { const r = await hostinger.get('/api/hosting/v1/websites?per_page=100'); if (!r.ok) throw new Error('Hostinger: ' + errText(r)); return Array.isArray(r.data) ? r.data : r.data?.data || []; },
+		/** The hosting account these sites live on (username and order id), read from an existing site. */
+		async account() { const w = (await hostinger.websites())[0]; if (!w?.username || !w?.order_id) throw new Error('Hostinger: couldn\'t read the account username and order id from the website list.'); return { username: w.username, order_id: w.order_id }; },
+		createWebsite: (domain, order_id) => hostinger.call('POST', '/api/hosting/v1/websites', { domain, order_id }),
+		installWordPress: (username, b) => hostinger.call('POST', `/api/hosting/v1/accounts/${encodeURIComponent(username)}/wordpress/installations`, b),
+		addParkedDomain: (username, site, parked) => hostinger.call('POST', `/api/hosting/v1/accounts/${encodeURIComponent(username)}/websites/${encodeURIComponent(site)}/parked-domains`, { parked_domain: parked }),
+		parkedDomains: async (username, site) => { const r = await hostinger.get(`/api/hosting/v1/accounts/${encodeURIComponent(username)}/websites/${encodeURIComponent(site)}/parked-domains`); if (!r.ok) throw new Error('Hostinger: ' + errText(r)); return Array.isArray(r.data) ? r.data : r.data?.data || []; },
+		installSsl: (username, domain) => hostinger.call('POST', `/api/hosting/v1/accounts/${encodeURIComponent(username)}/websites/${encodeURIComponent(domain)}/ssl/setup`),
+		deleteWebsite: (domain) => hostinger.call('DELETE', `/api/hosting/v1/websites/${encodeURIComponent(domain)}`),
 	};
 	const smartermail = makeSmarterMail(cfg, { fetch: f });
 	return { cfg, gateway, cloudflare, postmark, dns: dnsClient, http, tls: tlsInfo, ssh, probe, smartermail, hostinger };

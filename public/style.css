@@ -78,3 +78,19 @@ label.tick { display: flex; gap: 6px; align-items: center; font-weight: 600; mar
 @media (max-width: 700px) { li.req { flex-wrap: wrap; } .ra { flex-direction: row; width: 100%; padding-left: 38px; } }
 textarea { width: 100%; padding: 9px 11px; border: 1px solid #cfd4da; border-radius: 7px; font: inherit; }
 .ok .ic, .no .ic { } .res li.ok .ic { color: #17692e; } .res li.no .ic, .res li.error .ic { color: #8a1f1f; } .res li.warn .ic { color: #7a5a00; } .res li.info .ic, .res li.blocked .ic { color: #335; }
+/* board + project tabs */
+.boardtitle { margin: 22px 0 10px; color: var(--p); font-size: 16px; }
+.board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(210px, 1fr); gap: 12px; overflow-x: auto; padding-bottom: 12px; margin-bottom: 20px; }
+.col { background: #f1ebf3; border-radius: 10px; padding: 10px; min-height: 120px; }
+.colh { font-weight: 700; font-size: 13px; color: var(--p); margin-bottom: 8px; display: flex; justify-content: space-between; } .cnt { background: #fff; border-radius: 10px; padding: 0 8px; font-size: 12px; }
+.pcard { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; cursor: pointer; } .pcard:hover { border-color: var(--p); box-shadow: 0 1px 6px #74277c22; }
+.bar { height: 6px; background: #e8e1eb; border-radius: 4px; margin: 8px 0 4px; overflow: hidden; } .bar i { display: block; height: 100%; background: #2e9e4f; }
+.empty { text-align: center; padding: 8px 0; }
+.projh { display: flex; justify-content: space-between; gap: 20px; align-items: center; flex-wrap: wrap; } .projp { min-width: 220px; flex: 0 0 260px; }
+.nextbox { background: #fbf6fc; border: 1px solid var(--p); border-radius: 8px; padding: 10px 14px; margin: 12px 0; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; } .nextbox .primary { margin: 0; padding: 8px 14px; }
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 14px; }
+.tab { border: 1px solid var(--line); background: #fff; border-radius: 8px; padding: 9px 14px; font: inherit; font-weight: 600; cursor: pointer; display: flex; gap: 8px; align-items: center; }
+.tab.on { background: var(--p); color: #fff; border-color: var(--p); } .tab.full:not(.on) { border-color: #2e9e4f; color: #17692e; } .tab.na { opacity: .4; cursor: default; }
+.tc { font-size: 12px; font-weight: 700; background: #00000014; border-radius: 10px; padding: 1px 8px; } .tab.on .tc { background: #ffffff33; }
+.stagehd { display: flex; justify-content: space-between; align-items: baseline; } .stagehd h2 { margin: 0 0 6px; }
+.stagecard { margin-bottom: 16px; }

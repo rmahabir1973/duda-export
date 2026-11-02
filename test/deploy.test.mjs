@@ -9,21 +9,25 @@ import { createDeployRouter } from '../deploy/routes.mjs';
 import { shq, errText, configFromEnv, configured } from '../deploy/clients.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'dep-'));
-const baseCfg = { gatewayUrl: 'https://gw', gatewayAdminKey: 'k', previewZoneId: 'pz', previewDomain: 'churchwebglobal.com', hostingerIp: '1.2.3.4', templateSlug: 'build2', siteRoot: '/h/{host}', wpCli: 'wp', ourMxHosts: ['mail.churchwebglobal.com'], mailHost: 'mail.churchwebglobal.com', dudaIps: ['9.9.9.9'], postmarkServerToken: 'SRVTOK', postmarkAccountToken: 'ACC', cloudflareToken: 't', cloudflareAccountId: 'a', sshHost: 'h', sshUser: 'u', sshKey: 'k', defaultTokenCap: 5000, defaultImageCap: 3 };
+const baseCfg = { gatewayUrl: 'https://gw', gatewayAdminKey: 'k', previewZoneId: 'pz', previewDomain: 'churchwebglobal.com', hostingerIp: '1.2.3.4', templateSlug: 'build2', siteRoot: '/h/{host}', wpCli: 'wp', ourMxHosts: ['mail.churchwebglobal.com'], mailHost: 'mail.churchwebglobal.com', dudaIps: ['9.9.9.9'], postmarkServerToken: 'SRVTOK', postmarkAccountToken: 'ACC', cloudflareToken: 't', cloudflareAccountId: 'a', sshHost: 'h', sshUser: 'u', sshKey: 'k', defaultTokenCap: 5000, defaultImageCap: 3, hostingerApiKey: 'HK', wpAdminEmail: 'ops@example.com' };
 
 /** Fake services with a tiny pretend WordPress that answers the WP-CLI commands the checklist uses. */
 function fakes(over = {}) {
 	const calls = { ssh: [], cf: [], pm: [], gw: [] };
 	const zones = new Map(), recs = new Map([['pz', []]]);
-	const wpState = { siteurl: 'https://build2.churchwebglobal.com', blogname: 'Template', blog_public: '1', active: false, sv: '0', users: '', cfg: {}, ...(over.wp || {}) };
+	const wpState = { siteurl: 'https://build2.churchwebglobal.com', blogname: 'Template', blog_public: '1', active: false, activePlugins: [], installed: !over.noFolder, sv: '0', users: '', cfg: {}, ...(over.wp || {}) };
+	const TPL = ['churchweb-ai-assistant', 'oxygen', 'seo-by-rank-math'];
+	const sites = new Set(over.sites || ['grace-church.churchwebglobal.com', 'build2.churchwebglobal.com']);
 	const exec = async (cmd) => {
 		calls.ssh.push(cmd);
-		if (/^test -f/.test(cmd)) return over.noFolder ? { code: 1, out: '', err: '' } : { code: 0, out: 'FOUND', err: '' };
+		if (/^test -f/.test(cmd)) return /build2/.test(cmd) || wpState.installed ? { code: 0, out: 'FOUND', err: '' } : { code: 1, out: '', err: '' };
+		if (/cp -a/.test(cmd)) { const m2 = /plugins\/([A-Za-z0-9._-]+) /.exec(cmd); if (m2) wpState.activePlugins.push('copied:' + m2[1]); return { code: 0, out: '', err: '' }; }
 		const m = /&& wp (.*)$/s.exec(cmd); const a = m ? m[1] : '';
 		const ok = (out = '') => ({ code: 0, out, err: '' }), bad = (err = 'error') => ({ code: 1, out: '', err });
 		let x;
+		if (/^plugin list --status=active --field=name/.test(a)) return ok((/build2/.test(cmd) ? TPL : wpState.activePlugins.map((n) => n.replace('copied:', ''))).join('\n'));
 		if ((x = /^plugin is-active/.exec(a))) return wpState.active ? ok() : bad();
-		if ((x = /^plugin activate/.exec(a))) { if (over.pluginMissing) return bad('Error: The plugin could not be found.'); wpState.active = true; return ok(); }
+		if ((x = /^plugin activate/.exec(a))) { if (over.pluginMissing) return bad('Error: The plugin could not be found.'); const names = [...a.matchAll(/'([^']+)'|(churchweb-ai-assistant)/g)].map((q) => q[1] || q[2]); if (names.includes('churchweb-ai-assistant')) wpState.active = true; return ok(); }
 		if ((x = /^config get (\w+)/.exec(a))) return wpState.cfg[x[1]] ? ok(wpState.cfg[x[1]]) : bad();
 		if ((x = /^config set (\w+) '?([^' ]*)'?/.exec(a))) { wpState.cfg[x[1]] = x[2]; return ok(); }
 		if ((x = /^option get (\w+)/.exec(a))) return ok(wpState[x[1]]);
@@ -59,6 +63,15 @@ function fakes(over = {}) {
 		http: { get: async (u) => (over.http ? over.http(u) : { status: 200, headers: {}, location: '', text: '{"namespaces":["wp/v2"]}' }) },
 		tls: async () => ({ authorized: true, validTo: 'Jan 1 2027' }),
 		ssh: { available: () => !over.noSsh, exec },
+		hostinger: {
+			available: () => !over.noHostingerApi,
+			websites: async () => [...sites].map((d) => ({ domain: d, username: 'u1', order_id: 5, website_type: 'wordpress' })),
+			account: async () => ({ username: 'u1', order_id: 5 }),
+			createWebsite: async (d, o) => { calls.hst = calls.hst || []; calls.hst.push(['create', d, o]); sites.add(d); },
+			installWordPress: async (u, b) => { calls.hst = calls.hst || []; calls.hst.push(['wp', u, b]); wpState.installed = true; },
+			addParkedDomain: async (u, site, parked) => { calls.hst = calls.hst || []; calls.hst.push(['parked', u, site, parked]); },
+			installSsl: async (u, d) => { calls.hst = calls.hst || []; calls.hst.push(['ssl', u, d]); },
+		},
 	};
 	return { c, calls, zones, recs, wpState };
 }
@@ -80,14 +93,14 @@ test('slugify, store, shell quoting, SPF merge', () => {
 test('stage 1 tests: a fresh church shows what is missing, and later items wait for earlier ones', async () => {
 	const f = fakes(); const ch = createStore(tmp()).create({ name: 'Grace Church' });
 	const st = states(await testStage(ctxOf(f), ch, STAGES[0]));
-	assert.deepEqual(st, { folder: 'ok', dns: 'no', plugin: 'no', connected: 'blocked', address: 'no', title: 'no', preview: 'blocked', oxygen: 'no' });
+	assert.deepEqual(st, { site: 'ok', folder: 'ok', dns: 'no', plugins: 'no', plugin: 'blocked', connected: 'blocked', address: 'no', title: 'no', preview: 'blocked', oxygen: 'no' });
 	assert.ok(f.calls.ssh.every((c) => !/config set|option update|search-replace|plugin activate/.test(c)), 'testing never changes anything');
 });
 
 test('a missing site: one clear "no", everything that needs it waits, nothing is changed', async () => {
 	const f = fakes({ noFolder: true }); const ch = createStore(tmp()).create({ name: 'Grace Church' });
 	const st = states(await testStage(ctxOf(f), ch, STAGES[0]));
-	assert.equal(st.folder, 'no'); assert.equal(st.plugin, 'blocked'); assert.equal(st.address, 'blocked'); assert.equal(st.title, 'blocked');
+	assert.equal(st.folder, 'no'); assert.equal(st.plugins, 'blocked'); assert.equal(st.plugin, 'blocked'); assert.equal(st.address, 'blocked'); assert.equal(st.title, 'blocked');
 	assert.ok(f.calls.ssh.every((c) => /^test -f/.test(c)));
 });
 
@@ -128,7 +141,7 @@ test('"fix everything" repairs stage 1 in order, never leaks the key, and re-tes
 		let r = await t.j('/churches/grace-church/stages/preview/fix', 'POST', { req: 'all' }); assert.equal(r.s, 400, 'must confirm');
 		r = await t.j('/churches/grace-church/stages/preview/fix', 'POST', { req: 'all', confirm: true }); assert.equal(r.s, 200);
 		const res = r.j.church.stageStates.preview.results;
-		assert.deepEqual(states(res), { folder: 'ok', dns: 'ok', plugin: 'ok', connected: 'ok', address: 'ok', title: 'ok', preview: 'ok', oxygen: 'no' });
+		assert.deepEqual(states(res), { site: 'ok', folder: 'ok', dns: 'ok', plugins: 'ok', plugin: 'ok', connected: 'ok', address: 'ok', title: 'ok', preview: 'ok', oxygen: 'no' });
 		assert.equal(f.wpState.cfg.CWAI_API_KEY, 'cwai_grace-church_SECRETTOKEN');
 		assert.equal(f.wpState.siteurl, 'https://grace-church.churchwebglobal.com');
 		assert.equal(f.wpState.blogname, 'Grace Church'); assert.equal(f.wpState.blog_public, '0');
@@ -142,7 +155,7 @@ test('"fix everything" repairs stage 1 in order, never leaks the key, and re-tes
 });
 
 test('a plugin that is not installed gives a plain instruction instead of an error dump', async () => {
-	const f = fakes({ pluginMissing: true }); const t = await app(f);
+	const f = fakes({ pluginMissing: true, wp: { activePlugins: ['churchweb-ai-assistant', 'oxygen', 'seo-by-rank-math'], active: false } }); const t = await app(f);
 	try {
 		await t.j('/churches', 'POST', { name: 'Grace Church' });
 		const r = await t.j('/churches/grace-church/stages/preview/fix', 'POST', { req: 'plugin', confirm: true });
@@ -367,5 +380,47 @@ test('Hostinger access test: reads the website list, shows names and field names
 		assert.equal(bad.j.items[0].state, 'no'); assert.match(bad.j.items[0].detail, /HOSTINGER_API_KEY/);
 		f.c.hostinger.available = () => false;
 		assert.match((await t.j('/hostinger-probe', 'POST', {})).j.items[0].label, /No Hostinger API key/);
+	} finally { t.close(); }
+});
+
+test('a brand-new customer: creates the site on Hostinger, installs WordPress, copies the plugins, connects it', async () => {
+	const f = fakes({ sites: ['build2.churchwebglobal.com'], wp: { installed: false } }); const t = await app(f);
+	try {
+		await t.j('/churches', 'POST', { name: 'Grace Church', domain: 'grace.org' });
+		let r = await t.j('/churches/grace-church/stages/preview/fix', 'POST', { req: 'all', confirm: true });
+		assert.equal(r.s, 200);
+		assert.deepEqual(f.calls.hst[0], ['create', 'grace-church.churchwebglobal.com', 5]);
+		const wp = f.calls.hst.find((c) => c[0] === 'wp');
+		assert.equal(wp[1], 'u1'); assert.equal(wp[2].domain, 'grace-church.churchwebglobal.com'); assert.equal(wp[2].site_title, 'Grace Church');
+		assert.equal(wp[2].credentials.login, 'cwadmin'); assert.equal(wp[2].credentials.email, 'ops@example.com'); assert.ok(wp[2].credentials.password.length >= 16);
+		assert.equal(r.j.secret.password, wp[2].credentials.password, 'the new site login is shown once');
+		assert.ok(!JSON.stringify(t.store.get('grace-church')).includes(wp[2].credentials.password), 'and never stored');
+		assert.deepEqual(states(r.j.church.stageStates.preview.results), { site: 'ok', folder: 'ok', dns: 'ok', plugins: 'ok', plugin: 'ok', connected: 'ok', address: 'ok', title: 'ok', preview: 'ok', oxygen: 'no' });
+		assert.deepEqual(f.wpState.activePlugins.filter((x) => x.startsWith('copied:')).sort(), ['copied:churchweb-ai-assistant', 'copied:oxygen', 'copied:seo-by-rank-math']);
+	} finally { t.close(); }
+});
+
+test('WordPress needs an admin email: asks for it plainly when none is set', async () => {
+	const f = fakes({ sites: ['grace-church.churchwebglobal.com', 'build2.churchwebglobal.com'], wp: { installed: false }, cfg: { wpAdminEmail: '' } }); const t = await app(f);
+	try {
+		await t.j('/churches', 'POST', { name: 'Grace Church' });
+		const r = await t.j('/churches/grace-church/stages/preview/fix', 'POST', { req: 'folder', confirm: true });
+		assert.equal(r.j.fixed[0].ok, false); assert.match(r.j.fixed[0].detail, /admin email/);
+		assert.ok(!(f.calls.hst || []).some((c) => c[0] === 'wp'));
+	} finally { t.close(); }
+});
+
+test('go live: adds the real domain to the site and asks for the certificate through the API', async () => {
+	const f = fakes({ http: () => ({ status: 200, headers: {}, location: '', text: '<html>old site</html>' }) }); const t = await app(f);
+	try {
+		await t.j('/churches', 'POST', { name: 'Grace Church', domain: 'grace.org' });
+		await t.store.update('grace-church', (c) => { c.stages.dns = { done: true }; });
+		let r = await t.j('/churches/grace-church/stages/golive/fix', 'POST', { req: 'added', confirm: true });
+		assert.deepEqual(f.calls.hst.find((c) => c[0] === 'parked'), ['parked', 'u1', 'grace-church.churchwebglobal.com', 'grace.org']);
+		f.c.http.get = async () => ({ status: 200, headers: {}, location: '', text: '{"namespaces":["wp/v2"]}' });
+		f.c.tls = async () => ({ authorized: false, error: 'CERT_HAS_EXPIRED' });
+		r = await t.j('/churches/grace-church/stages/golive/fix', 'POST', { req: 'ssl', confirm: true });
+		assert.deepEqual(f.calls.hst.find((c) => c[0] === 'ssl'), ['ssl', 'u1', 'grace.org']);
+		assert.equal(r.j.fixed[0].ok, true);
 	} finally { t.close(); }
 });
