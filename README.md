@@ -146,3 +146,31 @@ Cloudflare token permissions: Zone:Create (account), Zone:Read, DNS:Edit for all
 
 ### Not yet tested against the real services
 Cloudflare, Postmark, SSH/WP-CLI on Hostinger and the gateway mint call are tested only against fakes (`npm test`). Do a first run on a throwaway church. Not yet automated: creating the subdomain/clone in hPanel, adding the domain in hPanel, and the SmarterMail domain/mailboxes (needs your server's `/Documentation/api`).
+
+## ChurchWeb Portal (v7.0)
+
+The app is now a team portal: sign-in accounts, a shared activity log, the United Church of Canada directory, and the existing deploy and email tools, all behind one login.
+
+### Railway variables
+| Variable | What it does |
+|---|---|
+| `DATABASE_URL` (or `NEON_DATABASE_URL`) | Neon connection string. Tables are created automatically. Without it the portal falls back to the old single password and the new tabs show a "needs the database" page. |
+| `PORTAL_ENC_KEY` | Long random value that encrypts everyone's two-step secrets. Set it once and never change it. |
+| `SESSION_SECRET` | Long random value for sessions. |
+| `APP_PASSWORD` | Bootstrap password. The first sign-in with it creates the first admin; after that it only matters for the legacy fallback. |
+| `DATA_DIR=/data` | Re-add once the entrypoint-fix build is live. |
+| `REQUIRE_2FA` | Leave unset. `0` turns the two-step requirement off (emergency only). |
+| `RESET_2FA_FOR` | Emergency: an email whose two-step setup is cleared on next start. Remove it afterwards. |
+| `CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD` | Optional. When both are set, every request must carry a valid Cloudflare Access token. Strongly recommended. |
+
+### Accounts and security
+- Each person has their own login. Two-step codes (authenticator app) are mandatory, with 8 single-use recovery codes.
+- Passwords: 12+ characters, scrypt-hashed. 5 wrong tries locks the account for 15 minutes. Sessions are stored hashed in the database, expire after 12 hours idle (7 days max), and use Secure/HttpOnly/SameSite=Strict cookies.
+- Admins create accounts (a one-time temporary password is shown once) and can reset passwords and two-step. The last admin cannot be removed. Only admins can delete a customer's hosted site.
+- The activity log is shared by everyone, records who did what and when, and never stores passwords or keys.
+
+### Renaming to portal.churchwebglobal.com
+Railway: Settings, Networking, add custom domain `portal.churchwebglobal.com`, then add the CNAME and verification TXT it shows in Cloudflare (DNS only until Railway verifies). Keep the old domain until the new one works.
+
+### Directory
+Directory tab: import the exported CSV once under "Manage data". Customers are matched by website or email domain against the customer-domain list.

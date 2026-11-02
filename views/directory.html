@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>United Church of Canada directory · ChurchWeb Portal</title><meta name="robots" content="noindex,nofollow"><link rel="stylesheet" href="/assets/style.css"></head>
+<body class="dirpage"><header id="topbar"></header><script src="/assets/nav.js"></script>
+<div class="dirhead"><div class="dirtitle"><span class="dirmark">⌂</span><div><small>CHURCHWEB GLOBAL</small><h1>United Church of Canada directory</h1></div></div><div class="dirsource"><small>SOURCE</small><div id="src">—</div></div></div>
+<main class="wide">
+  <div class="statgrid" id="stats"></div>
+  <div class="filterbar">
+    <input id="q" type="search" placeholder="Search church, city, postal code or email" autocomplete="off">
+    <select id="province"><option value="">All provinces</option></select>
+    <select id="listing"><option value="">All listings</option><option value="church">Churches</option><option value="charge">Pastoral charges</option></select>
+    <select id="sort"><option value="name|asc">Sort: name</option><option value="name|desc">Sort: name (Z–A)</option><option value="city|asc">Sort: city</option><option value="province|asc">Sort: province</option><option value="postal|asc">Sort: postal code</option><option value="status|asc">Sort: outreach status</option></select>
+    <button class="chip" id="fbtn" type="button">Filters</button>
+    <button class="chip" id="hasEmail" type="button">Has email</button>
+    <a class="chip" id="export" href="#">Export CSV</a>
+  </div>
+  <div class="filterpanel" id="panel" hidden>
+    <div><label>Regional council</label><select id="council"><option value="">Any</option></select></div>
+    <div><label>Pastoral charge contains</label><input id="charge" type="text" placeholder="e.g. Abbey"></div>
+    <div><label>Website</label><select id="hasWebsite"><option value="">Any</option><option value="yes">Has a website</option><option value="no">No website</option></select></div>
+    <div><label>Existing customer</label><select id="customer"><option value="">Any</option><option value="yes">Yes</option><option value="no">No (prospects)</option></select></div>
+    <div><label>Outreach status</label><select id="status"><option value="">Any</option></select></div>
+    <div><button class="sm" id="clear" type="button">Clear filters</button></div>
+  </div>
+  <div class="banner" id="banner"></div>
+  <div class="dirmeta"><span id="shown"></span><span class="hint">Duplicate pastoral-charge listings are excluded; charges with no church listing are kept.</span></div>
+  <div class="tablewrap"><table class="dirtable"><thead><tr><th>Name</th><th>Type</th><th>City</th><th>Prov.</th><th>Address</th><th>Postal code</th><th>Phone</th><th>Email</th><th>Website</th><th>Customer</th><th>Outreach</th></tr></thead><tbody id="rows"></tbody></table></div>
+  <div class="pager"><button class="sm" id="prev">← Previous</button><span id="page"></span><button class="sm" id="next">Next →</button></div>
+  <details class="card manage"><summary>Manage data</summary>
+    <h3>Import the directory file</h3><p class="hint">Choose the exported CSV. Existing listings are updated, new ones added, and outreach notes are kept.</p>
+    <input id="file" type="file" accept=".csv,text/csv"> <button class="primary" id="imp" type="button">Import</button> <span id="impOut" class="hint"></span>
+    <h3>Customer domains</h3><p class="hint">Paste your customers' website domains, one per line. They are matched to listings by website or email domain (this will fill in automatically once the Hosted domains tab is live).</p>
+    <textarea id="doms" rows="4" placeholder="britanniaunited.ca&#10;graceunited.org"></textarea>
+    <div class="btns"><button class="primary" id="addDoms" type="button">Add and match</button><button class="sm danger" id="clrDoms" type="button">Remove the pasted list</button></div>
+  </details>
+  <p class="err" id="err"></p>
+</main>
+<script src="/assets/directory.js"></script></body></html>

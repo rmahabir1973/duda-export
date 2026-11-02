@@ -1,16 +1,41 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sign in · DUDA Export</title><meta name="robots" content="noindex,nofollow"><link rel="stylesheet" href="/assets/style.css"></head>
+<title>Sign in · ChurchWeb Portal</title><meta name="robots" content="noindex,nofollow"><link rel="stylesheet" href="/assets/style.css"></head>
 <body>
 <div class="login card">
-  <h2>DUDA Export</h2>
-  <p class="hint">ChurchWeb Global. Enter the password to continue.</p>
-  <form id="f">
+  <img src="/assets/logo.png" alt="ChurchWeb Global" style="height:46px;margin-bottom:14px">
+  <h2>Portal</h2>
+  <form id="f" class="step" data-step="password">
+    <p class="hint" id="hint">Sign in to continue.</p>
+    <div id="emailRow"><label for="em">Email</label><input id="em" type="text" autocomplete="username" autofocus></div>
     <label for="pw">Password</label>
-    <input id="pw" type="password" autocomplete="current-password" autofocus required>
-    <button class="primary" type="submit">Sign in</button>
-    <p class="err" id="err" role="alert"></p>
+    <input id="pw" type="password" autocomplete="current-password" required>
+    <button class="primary" type="submit">Continue</button>
   </form>
+  <form id="fc" class="step" data-step="code" hidden>
+    <p class="hint">Open your authenticator app and enter the 6-digit code for <b>ChurchWeb Portal</b>.</p>
+    <label for="cd">Code</label>
+    <input id="cd" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="12" placeholder="123456" required>
+    <button class="primary" type="submit">Sign in</button>
+    <p class="hint">Lost your phone? Enter one of your recovery codes instead (like <code>ab2cd-3ef4g</code>), then ask an admin to reset your 2FA.</p>
+  </form>
+  <form id="fe" class="step" data-step="enroll" hidden>
+    <p class="hint"><b>Set up two-factor sign-in.</b> It's required for every account.</p>
+    <ol class="hint" style="padding-left:18px"><li>Install an authenticator app (Google Authenticator, Microsoft Authenticator, Authy or 1Password).</li><li>Scan this code with the app.</li><li>Type the 6-digit code it shows.</li></ol>
+    <div id="qr" style="text-align:center"></div>
+    <p class="hint">Can't scan? Enter this key by hand: <code id="sec" style="user-select:all"></code></p>
+    <label for="ec">6-digit code</label>
+    <input id="ec" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456" required>
+    <button class="primary" type="submit">Turn on 2FA</button>
+  </form>
+  <div id="rc" class="step" hidden>
+    <p><b>Save your recovery codes.</b></p>
+    <p class="hint">Each code works once if you lose your phone. This is the only time they are shown. Keep them somewhere safe, like a password manager.</p>
+    <pre id="codes" class="how" style="user-select:all"></pre>
+    <label class="inline"><input id="saved" type="checkbox"> I have saved these codes</label>
+    <button class="primary" id="done" disabled>Continue</button>
+  </div>
+  <p class="err" id="err" role="alert"></p>
 </div>
 <script src="/assets/login.js"></script>
 </body></html>

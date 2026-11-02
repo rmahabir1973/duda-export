@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Users · ChurchWeb Portal</title><meta name="robots" content="noindex,nofollow"><link rel="stylesheet" href="/assets/style.css"></head>
+<body><header id="topbar"></header><script src="/assets/nav.js"></script>
+<main><section class="card"><h2>Team accounts</h2><p class="hint">Everyone has their own sign-in and two-step code, but all work and activity is shared.</p>
+<div id="tmp" class="need" hidden></div>
+<div class="tablewrap"><table class="dirtable" style="min-width:0"><thead><tr><th>Person</th><th>Role</th><th>2-step</th><th>Last sign-in</th><th></th></tr></thead><tbody id="rows"></tbody></table></div></section>
+<section class="card" style="max-width:520px"><h3>Add a person</h3>
+<form id="f"><label for="em">Email</label><input id="em" type="email" required><label for="nm">Name</label><input id="nm" type="text"><label for="rl">Role</label><select id="rl"><option value="staff">Staff</option><option value="admin">Admin (can manage accounts and delete sites)</option></select>
+<button class="primary" type="submit">Create account</button><p class="hint">A one-time temporary password is shown once. They choose their own at first sign-in and set up their two-step code.</p><p class="err" id="err"></p></form></section></main>
+<script src="/assets/users.js"></script></body></html>

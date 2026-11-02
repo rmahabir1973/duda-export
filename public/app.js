@@ -47,10 +47,6 @@ $('bf').addEventListener('submit', async (e) => {
 	}
 	$('bgo').disabled = false;
 });
-$('logout').onclick = async () => {
-	await api('/logout', { method: 'POST' });
-	location.reload();
-};
 
 const when = (t) => (t ? new Date(t).toLocaleString() : '');
 function result(j) {

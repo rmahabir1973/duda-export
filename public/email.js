@@ -10,7 +10,6 @@ const post = async (path, body) => {
 	return j;
 };
 const show = (el, items) => { el.innerHTML = items.map((i) => `<li class="${esc(i.state)}"><span class="ic">${LABEL[i.state] || esc(i.state)}</span><div>${esc(i.label)}${i.detail ? `<pre>${esc(i.detail)}</pre>` : ''}</div></li>`).join(''); };
-$('logout').onclick = async () => { await fetch('/logout', { method: 'POST', headers: H }); location.reload(); };
 async function go(btn, out, path, body, confirmText) {
 	$('err').textContent = '';
 	if (confirmText && !confirm(confirmText)) return;

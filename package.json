@@ -6,7 +6,7 @@
   "description": "Password-protected web front end for duda-export: run a DUDA site export from a browser (or an agent) and download the ZIP.",
   "scripts": {
     "start": "node server.mjs",
-    "test": "node --test test/deploy.test.mjs"
+    "test": "node --test test/deploy.test.mjs test/portal.test.mjs"
   },
   "engines": {
     "node": ">=20"
@@ -14,9 +14,14 @@
   "dependencies": {
     "archiver": "^7.0.1",
     "express": "^4.21.2",
+    "pg": "^8.23.1",
     "playwright": "^1.48.0",
+    "qrcode": "^1.5.4",
     "ssh2": "^1.17.0",
     "turndown": "^7.2.0",
     "turndown-plugin-gfm": "^1.0.2"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.14"
   }
 }

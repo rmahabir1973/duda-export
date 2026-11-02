@@ -11,6 +11,9 @@ import { createStore } from './deploy/store.mjs';
 import { configFromEnv, makeClients } from './deploy/clients.mjs';
 import { createDeployRouter } from './deploy/routes.mjs';
 import { createEmailRouter } from './deploy/emailroutes.mjs';
+import { connectDb, migrate } from './portal/db.mjs';
+import { createPortal } from './portal/routes.mjs';
+import { createAccessGuard } from './portal/access.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const env = process.env;
@@ -223,22 +226,42 @@ function cleanup() {
 cleanup();
 setInterval(cleanup, 30 * 60 * 1000).unref();
 
+/* ---------------------------------------------------------------- accounts + database (optional: falls back to the single password) */
+let portal = null;
+const dbUrl = (env.NEON_DATABASE_URL || env.DATABASE_URL || '').trim();
+if (dbUrl) {
+	try {
+		const db = await connectDb(dbUrl);
+		await migrate(db);
+		if (!env.PORTAL_ENC_KEY) console.warn('portal: PORTAL_ENC_KEY is not set, so the 2FA secrets are encrypted with a key derived from SESSION_SECRET / APP_PASSWORD. Set PORTAL_ENC_KEY (a long random value) in Railway and never change it.');
+		portal = await createPortal({ db, sessionHours: SESSION_HOURS, apiToken: API_TOKEN, bootstrapPassword: APP_PASSWORD, requireTwoFactor: env.REQUIRE_2FA !== '0', encryptionKey: env.PORTAL_ENC_KEY || SESSION_SECRET, hooks: { locked: (ip) => locked(ip), noteFail: (ip) => noteFail(ip), clearFail: (ip) => fails.delete(ip) } });
+		console.log(`portal: database connected, user accounts are on, two-factor ${env.REQUIRE_2FA === '0' ? 'OFF (REQUIRE_2FA=0)' : 'required'}`);
+		if (env.RESET_2FA_FOR) { const done = await portal.auth.resetTwoFactorByEmail(env.RESET_2FA_FOR); console.warn(`portal: RESET_2FA_FOR is set: ${done ? 'cleared 2FA for ' + env.RESET_2FA_FOR : 'no account ' + env.RESET_2FA_FOR}. Remove the variable now.`); }
+	} catch (e) { console.error('portal: database not available, using the single password login instead:', e.message); }
+} else console.log('portal: no DATABASE_URL, using the single password login');
+
 /* ---------------------------------------------------------------- web */
 const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
+if (env.CF_ACCESS_TEAM_DOMAIN && env.CF_ACCESS_AUD) { app.use(createAccessGuard({ teamDomain: env.CF_ACCESS_TEAM_DOMAIN.replace(/^https?:\/\//, '').replace(/\/$/, ''), aud: env.CF_ACCESS_AUD })); console.log('portal: only requests that passed Cloudflare Access are accepted'); }
 app.use((req, res, next) => {
+	if (req.secure) res.set('Strict-Transport-Security', 'max-age=63072000; includeSubDomains');
 	res.set({
 		'X-Content-Type-Options': 'nosniff',
 		'X-Frame-Options': 'DENY',
 		'Referrer-Policy': 'no-referrer',
 		'Cache-Control': 'no-store',
-		'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'",
+		'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'",
+		'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
+		'Cross-Origin-Opener-Policy': 'same-origin',
+		'Cross-Origin-Resource-Policy': 'same-origin',
 	});
 	next();
 });
 app.get('/healthz', (req, res) => res.type('text').send('ok'));
 app.use(express.json({ limit: '20kb' }));
+if (portal) { app.use(portal.attach); app.use(portal.auditChanges); }
 app.use('/assets', express.static(path.join(__dirname, 'public'), { index: false }));
 
 const fails = new Map();
@@ -259,7 +282,7 @@ function auth(req) {
 	if (validSession(parseCookies(req.get('cookie')).cw_session)) return 'session';
 	return null;
 }
-const need = (req, res, next) => {
+const legacyNeed = (req, res, next) => {
 	const how = auth(req);
 	if (!how) return res.status(401).json({ error: 'Not signed in' });
 	// cookie-authenticated writes must come from this site
@@ -271,10 +294,17 @@ const need = (req, res, next) => {
 	req.by = how;
 	next();
 };
+const need = portal ? portal.need : legacyNeed;
+const signedIn = (req) => (portal ? !!req.user : auth(req) === 'session');
+const page = (file, { dbOnly = false } = {}) => (req, res) => res.type('html').send(html(!signedIn(req) ? 'login.html' : dbOnly && !portal ? 'needsdb.html' : file));
 
-app.get('/', (req, res) => res.type('html').send(html(auth(req) === 'session' ? 'app.html' : 'login.html')));
+app.get('/', (req, res) => (signedIn(req) ? res.redirect('/deploy') : res.type('html').send(html('login.html'))));
+app.get('/exporter', page('app.html'));
+if (portal) portal.mount(app);
+else app.get('/api/auth-mode', (req, res) => res.json({ mode: 'password', firstRun: false }));
+if (!portal) app.get('/api/me', legacyNeed, (req, res) => res.json({ user: { email: 'admin', name: 'Shared password', role: 'admin', mustChange: false }, mode: 'password' }));
 
-app.post('/login', (req, res) => {
+if (!portal) app.post('/login', (req, res) => {
 	if (locked(req.ip)) return res.status(429).json({ error: 'Too many attempts. Try again in 10 minutes.' });
 	const o = req.get('origin');
 	if (o && new URL(o).host !== req.get('host')) return res.status(403).json({ error: 'Bad origin' });
@@ -286,7 +316,7 @@ app.post('/login', (req, res) => {
 	res.cookie('cw_session', makeSession(), { httpOnly: true, sameSite: 'lax', secure: req.secure, maxAge: SESSION_HOURS * 3600 * 1000, path: '/' });
 	res.json({ ok: true });
 });
-app.post('/logout', (req, res) => {
+if (!portal) app.post('/logout', (req, res) => {
 	res.clearCookie('cw_session', { path: '/' });
 	res.json({ ok: true });
 });
@@ -294,8 +324,12 @@ app.post('/logout', (req, res) => {
 const deployClients = makeClients(configFromEnv(env));
 app.use('/api/deploy', createDeployRouter({ need, store: createStore(path.join(DATA_DIR, 'deploy')), clients: deployClients }));
 app.use('/api/email', createEmailRouter({ need, clients: deployClients }));
-app.get('/email', (req, res) => res.type('html').send(html(auth(req) === 'session' ? 'email.html' : 'login.html')));
-app.get('/deploy', (req, res) => res.type('html').send(html(auth(req) === 'session' ? 'deploy.html' : 'login.html')));
+app.get('/email', page('email.html'));
+app.get('/deploy', page('deploy.html'));
+app.get('/directory', page('directory.html', { dbOnly: true }));
+app.get('/activity', page('activity.html', { dbOnly: true }));
+app.get('/users', page('users.html', { dbOnly: true }));
+app.get('/account', page('account.html', { dbOnly: true }));
 
 app.get('/api/config', need, (req, res) => res.json({ apiAvailable: API_AVAILABLE, maxPagesCap: MAX_PAGES_CAP, retentionHours: RETENTION_MS / 3600000, allowedDomains: ALLOWED_DOMAINS }));
 app.get('/api/jobs', need, (req, res) => res.json([...jobs.values()].sort((a, b) => b.created - a.created).map(publicJob)));

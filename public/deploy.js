@@ -25,7 +25,6 @@ const PHASES = [
 const phaseOf = (stageKey) => PHASES.find((p) => p.stages.includes(stageKey));
 let CFG = null, cur = null, openPhase = 'domain', secret = null, msgs = {}, working = '', openHow = {};
 
-$('logout').onclick = async () => { await fetch('/logout', { method: 'POST', headers: H }); location.reload(); };
 
 /* ------------------------------------------------------------------ the board */
 async function loadBoard() {

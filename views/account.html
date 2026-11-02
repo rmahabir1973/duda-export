@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>My account · ChurchWeb Portal</title><meta name="robots" content="noindex,nofollow"><link rel="stylesheet" href="/assets/style.css"></head>
+<body><header id="topbar"></header><script src="/assets/nav.js"></script>
+<main><section class="card" style="max-width:520px"><h2>My account</h2>
+<p id="who" class="hint"></p><p id="must" class="need" hidden>Please choose your own password to continue.</p>
+<form id="f"><label for="cur">Current password</label><input id="cur" type="password" autocomplete="current-password" required>
+<label for="nw">New password</label><input id="nw" type="password" autocomplete="new-password" required><p class="hint">At least 12 characters, with a capital letter, a small letter and a number.</p>
+<label for="nw2">New password again</label><input id="nw2" type="password" autocomplete="new-password" required>
+<button class="primary" type="submit">Change password</button><p class="err" id="err"></p><p id="ok" style="color:#17692e"></p></form></section>
+<section class="card" style="max-width:520px"><h3>Two-step sign-in</h3><p id="tfs" class="hint"></p>
+<p class="hint">Recovery codes are single-use backups for when your phone is not at hand. Making new ones replaces the old set.</p>
+<form id="rf"><label for="rpw">Password</label><input id="rpw" type="password" autocomplete="current-password" required><label for="rcd">Code from your authenticator app</label><input id="rcd" type="text" inputmode="numeric" autocomplete="one-time-code" required>
+<button class="sm" type="submit">Make new recovery codes</button><p class="err" id="rerr"></p><pre id="codes" hidden></pre></form></section></main>
+<script src="/assets/account.js"></script></body></html>

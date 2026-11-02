@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Activity · ChurchWeb Portal</title><meta name="robots" content="noindex,nofollow"><link rel="stylesheet" href="/assets/style.css"></head>
+<body><header id="topbar"></header><script src="/assets/nav.js"></script>
+<main class="wide"><section class="card"><h2>Activity log</h2><p class="hint">Everything anyone does in the portal is recorded here, and the whole team sees the same log. Passwords and keys are never written to it.</p>
+<div class="filterbar"><input id="q" type="search" placeholder="Search what, who or which site"><select id="user"><option value="">Everyone</option></select><a class="chip" id="export" href="#">Export CSV</a></div>
+<div class="tablewrap"><table class="dirtable"><thead><tr><th>When</th><th>Who</th><th>What</th><th>On</th><th>Result</th><th>Details</th></tr></thead><tbody id="rows"></tbody></table></div>
+<div class="pager"><button class="sm" id="prev">← Newer</button><span id="page"></span><button class="sm" id="next">Older →</button></div><p class="err" id="err"></p></section></main>
+<script src="/assets/activity.js"></script></body></html>

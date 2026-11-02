@@ -89,6 +89,7 @@ export function createDeployRouter({ need, store, clients }) {
 		if (req.body?.confirm !== ch.id) return res.status(400).json({ error: 'Type the short name to confirm.' });
 		const out = [];
 		if (req.body?.deleteSite) {
+			if (req.user && req.user.role !== 'admin') return res.status(403).json({ error: 'Only an admin can delete a site on Hostinger.' });
 			const cfg = clients.cfg, host = `${ch.slug}.${cfg.previewDomain}`, tpl = `${cfg.templateSlug}.${cfg.previewDomain}`;
 			if (host === tpl || /^build\d*$/.test(ch.slug)) return res.status(400).json({ error: `Refusing to delete ${host}: it looks like one of our template or build sites.` });
 			if (ch.stages.golive?.done) return res.status(400).json({ error: 'This customer is live. Delete the site by hand in Hostinger if you really mean to, so it can\'t happen by accident.' });
