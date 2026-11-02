@@ -37,6 +37,19 @@ export function makeSmarterMail(cfg, { fetch: f = globalThis.fetch } = {}) {
 			if (/exist|already|duplicate/i.test(msg(r))) return { ok: true, exists: true };
 			return { ok: false, error: msg(r), status: r.status };
 		},
+		/** Domain names on the server. SmarterMail versions differ in the call, so try the known shapes and say what was tried. */
+		async domains(token) {
+			const tried = [];
+			for (const [method, path] of [['GET', 'api/v1/settings/sysadmin/domains'], ['POST', 'api/v1/settings/sysadmin/domain-list'], ['GET', 'api/v1/settings/sysadmin/domain-list'], ['GET', 'api/v1/settings/sysadmin/list-domains']]) {
+				const r = await call(path, { token, method, body: method === 'POST' ? {} : undefined });
+				tried.push(`${method} ${path.split('/').pop()}: ${r.status || r.error}`);
+				if (!r.ok) continue;
+				const names = new Set(), walk = (v, d = 0) => { if (d > 4 || !v) return; if (Array.isArray(v)) return v.forEach((x) => (typeof x === 'string' && /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(x) ? names.add(x.toLowerCase()) : walk(x, d + 1))); if (typeof v === 'object') { for (const k of ['name', 'domain', 'domainName']) if (typeof v[k] === 'string' && /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(v[k])) names.add(v[k].toLowerCase()); for (const x of Object.values(v)) if (x && typeof x === 'object') walk(x, d + 1); } };
+				walk(r.data);
+				if (names.size) return { ok: true, domains: [...names], via: path };
+			}
+			return { ok: false, error: 'SmarterMail did not return a domain list (' + tried.join('; ') + ')' };
+		},
 		/** Sets an existing user's password. The caller must check it worked (sign in with the new password): SmarterMail versions differ in what they accept. */
 		async setPassword(token, { domain, userName, password }) {
 			let last = '';

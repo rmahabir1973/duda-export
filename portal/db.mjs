@@ -133,6 +133,16 @@ const MIGRATIONS = [
 	);
 	create index if not exists outreach_events_at on outreach_events(at);
 	`],
+	[5, `
+	create table if not exists hosted_domains (
+		domain text primary key,
+		in_cloudflare boolean not null default false, cf_status text not null default '',
+		in_duda boolean not null default false, duda_site text not null default '', duda_status text not null default '',
+		in_smartermail boolean not null default false,
+		in_hostinger boolean not null default false, hostinger_site text not null default '',
+		first_seen timestamptz not null default now(), updated_at timestamptz not null default now()
+	);
+	`],
 ];
 
 /** Applies any migration not yet applied. Safe to run on every start. */

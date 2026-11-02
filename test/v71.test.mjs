@@ -163,3 +163,73 @@ test('assistant: history is cleaned (no orphaned tool results, bad parts rejecte
 	const off = createAssistant({ tools: [], audit: {}, clients, env: {}, fetchImpl: async () => ({}) });
 	await assert.rejects(off.chat(user, [{ role: 'user', content: 'hi' }]), /not set up/);
 });
+
+/* ---------------------------------------------------------------- hosted domains */
+import { createHosted } from '../portal/hosted.mjs';
+import { makeSmarterMail } from '../deploy/smartermail.mjs';
+import { buildTools } from '../portal/assistantTools.mjs';
+
+const DIRCSV = `Name,Type,Address,City,Province,Postal Code,Phone,Email,Website
+Erindale United Church,Congregation,1 Main,Mississauga,ON,L5L1L1,,office@erindaleunited.church,https://www.erindaleunited.church
+Other United Church,Congregation,2 Main,Ottawa,ON,K1K1K1,,info@otherchurch.ca,otherchurch.ca
+`;
+const fakeDuda = (sites) => ({ available: () => true, call: async (name, a) => name === 'list_sites' ? JSON.stringify({ results: sites.map((s) => ({ site_name: s.n, publish_status: s.pub ? 'PUBLISHED' : 'NOT_PUBLISHED_YET' })), has_more: false }) : `Domain Information:\n{\n  "site_domain": "${sites.find((s) => s.n === a.site_name).d}",\n  "site_name": "${a.site_name}"\n}` });
+async function hostedEnv({ cf = ['erindaleunited.church', 'zoneonly.org', 'churchwebglobal.com'], mail = ['erindaleunited.church', 'mailonly.ca'], cfFails = false, dudaSites } = {}) {
+	const db = await fresh(), dir = createDirectory(db); await dir.import(toRecords(parseCsv(DIRCSV)));
+	const clients = {
+		cloudflare: { available: () => true, zones: async () => { if (cfFails) throw new Error('Cloudflare: token cannot access this account'); return cf.map((name) => ({ id: 'z' + name, name, status: 'active' })); } },
+		smartermail: { available: () => true, sysLogin: async () => 'tok', domains: async () => ({ ok: true, domains: mail }) },
+		hostinger: { available: () => true, websites: async () => [{ domain: 'grace.churchwebglobal.com', username: 'u1' }], parkedDomains: async () => ['www.erindaleunited.church'] },
+	};
+	const duda = fakeDuda(dudaSites || [{ n: 'aaa', pub: true, d: 'www.erindaleunited.church' }, { n: 'bbb', pub: false, d: '' }, { n: 'ccc', pub: true, d: 'dudaonly.ca' }]);
+	const hosted = createHosted({ db, clients, duda, dir, ownDomains: ['churchwebsupport.com'], log: () => {} });
+	return { db, dir, hosted };
+}
+
+test('hosted sync: merges the four sources per domain, leaves out our own domains, and marks directory churches as customers', async () => {
+	const { hosted, dir, db } = await hostedEnv();
+	const res = await hosted.sync();
+	assert.deepEqual(Object.fromEntries(Object.entries(res).map(([k, v]) => [k, v.ok])), { cloudflare: true, duda: true, smartermail: true, hostinger: true });
+	const l = await hosted.lookup('www.ErindaleUnited.church');
+	assert.deepEqual(l.hosted, { cloudflare: 'yes (active)', duda: 'yes (site aaa)', smartermail: 'yes', hostinger: 'yes (grace.churchwebglobal.com)' });
+	assert.equal(l.directory_listings[0].name, 'Erindale United Church'); assert.equal(l.directory_listings[0].is_customer, true);
+	const all = (await hosted.list({})).rows.map((r) => r.domain);
+	assert.ok(!all.some((d) => d.endsWith('churchwebglobal.com')), 'our own domains and preview sites are not customers'); assert.ok(all.includes('zoneonly.org') && all.includes('dudaonly.ca') && all.includes('mailonly.ca'));
+	assert.deepEqual((await hosted.list({ gap: 'duda-not-cloudflare' })).rows.map((r) => r.domain), ['dudaonly.ca']);
+	assert.deepEqual((await hosted.list({ gap: 'mail-not-cloudflare' })).rows.map((r) => r.domain), ['mailonly.ca']);
+	assert.equal((await dir.list({ customer: 'yes' })).rows.length, 1, 'only Erindale matches; the other church is not hosted by us');
+	assert.equal((await db.query("select count(*)::int as n from customer_domains where source = 'sync'"))[0].n, all.length);
+	const unknown = await hosted.lookup('nothostedhere.org'); assert.equal(unknown.hosted, null); assert.match(unknown.note, /Not found in the last sync/);
+});
+
+test('hosted sync: a failing source is reported and never wipes what the others found; a later sync removes domains that left', async () => {
+	const { hosted, db } = await hostedEnv();
+	await hosted.sync();
+	const again = await hostedEnv({ cfFails: true }); // fresh db: Cloudflare failing from the start
+	const r = await again.hosted.sync();
+	assert.equal(r.cloudflare.ok, false); assert.match(r.cloudflare.error, /cannot access/); assert.equal(r.duda.ok, true);
+	assert.equal((await again.hosted.lookup('erindaleunited.church')).hosted.cloudflare, 'no');
+	const st = await again.hosted.status(); assert.equal(st.sources.cloudflare.ok, false); assert.equal(st.running, false);
+	// a domain that disappears from every source is dropped on the next sync
+	await db.query("insert into hosted_domains (domain, in_cloudflare) values ('stale.org', true)");
+	await hosted.sync(); assert.equal((await db.query("select count(*)::int as n from hosted_domains where domain = 'stale.org'"))[0].n, 0);
+});
+
+test('assistant tool lookup_domain answers from the sync, with source health', async () => {
+	const { hosted, dir, db } = await hostedEnv({ cfFails: true });
+	await hosted.sync();
+	const store = createStore(fs.mkdtempSync(path.join(os.tmpdir(), 'hd-'))); store.create({ name: 'Erindale United', domain: 'erindaleunited.church', kind: 'migration' });
+	const tool = buildTools({ store, clients: {}, dir, outreach: null, audit: createAudit(db), hosted }).find((t) => t.name === 'lookup_domain');
+	const out = await tool.run({ domain: 'erindaleunited.church' });
+	assert.equal(out.hosted.duda, 'yes (site aaa)'); assert.equal(out.on_customers_board[0].type, 'DUDA migration');
+	assert.match(out.sources_last_sync.cloudflare, /^FAILED/); assert.equal(buildTools({ store, clients: {}, dir, audit: {} }).some((t) => t.name === 'lookup_domain'), false);
+});
+
+test('SmarterMail domain list: tries the known calls and reads the names from whichever shape comes back', async () => {
+	const seen = [];
+	const f = async (url, o) => { seen.push(o.method + ' ' + url.split('/').pop()); const ok = url.endsWith('domain-list') && o.method === 'POST'; return { ok, status: ok ? 200 : 404, text: async () => JSON.stringify(ok ? { domains: [{ name: 'A.ca', hostname: 'mail' }, { name: 'b.org' }] } : { message: 'nope' }) }; };
+	const sm = makeSmarterMail({ smartermailUrl: 'https://mail.x', smartermailUser: 'u', smartermailPassword: 'p' }, { fetch: f });
+	assert.deepEqual(await sm.domains('t'), { ok: true, domains: ['a.ca', 'b.org'], via: 'api/v1/settings/sysadmin/domain-list' });
+	const none = await makeSmarterMail({ smartermailUrl: 'https://mail.x' }, { fetch: async () => ({ ok: false, status: 404, text: async () => '{}' }) }).domains('t');
+	assert.equal(none.ok, false); assert.match(none.error, /did not return a domain list/);
+});

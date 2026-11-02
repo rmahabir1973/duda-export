@@ -3,7 +3,7 @@
 	const bar = document.getElementById('topbar');
 	if (!bar) return;
 	const H = { 'Content-Type': 'application/json', 'X-Requested-With': 'duda-export' };
-	const TABS = [['/deploy', 'Customers'], ['/email', 'Email setup'], ['/directory', 'Directory', 'acct'], ['/exporter', 'Exporter'], ['/activity', 'Activity', 'acct'], ['/users', 'Users', 'admin']];
+	const TABS = [['/deploy', 'Customers'], ['/email', 'Email setup'], ['/directory', 'Directory', 'acct'], ['/domains', 'Domains', 'acct'], ['/exporter', 'Exporter'], ['/activity', 'Activity', 'acct'], ['/users', 'Users', 'admin']];
 	const here = location.pathname.replace(/\/$/, '') || '/';
 	const tab = ([href, label]) => `<a class="tab-top${here === href ? ' on' : ''}" href="${href}">${label}</a>`;
 	bar.className = 'topbar';

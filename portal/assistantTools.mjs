@@ -7,7 +7,7 @@ import { normDomain, DOMAIN_RE } from '../deploy/store.mjs';
 const trim = (s, n = 400) => String(s ?? '').slice(0, n);
 const MAIL_RE = /^([a-z0-9][a-z0-9._-]{0,63})@((?:[a-z0-9-]+\.)+[a-z]{2,})$/;
 
-export function buildTools({ store, clients, dir, outreach, audit }) {
+export function buildTools({ store, clients, dir, outreach, audit, hosted }) {
 	const ctxFor = () => ({ c: clients, configured: configured(clients.cfg), memo: {}, facts: null, secret: null });
 	const need = (id) => { const c = store.get(id); if (!c) throw new Error(`No customer with id "${id}". Use list_customers to see the ids.`); return c; };
 	const stageSummary = (ch, s, results) => ({ stage: s.key, title: s.title, tasks: reqsFor(s, ch).map((q) => ({ id: q.id, task: q.label, state: results?.[q.id]?.state || 'not checked', detail: trim(results?.[q.id]?.detail, 240) })) });
@@ -53,6 +53,20 @@ export function buildTools({ store, clients, dir, outreach, audit }) {
 			input_schema: { type: 'object', properties: { q: { type: 'string' }, province: { type: 'string', description: 'Two-letter code such as ON' }, status: { type: 'string', description: 'Outreach status: new, to contact, contacted, replied, not interested, do not contact, customer' }, customer: { type: 'string', enum: ['yes', 'no'] }, has_email: { type: 'boolean' } } },
 			run: async (i) => { const r = await dir.list({ q: i.q, province: i.province, status: i.status, customer: i.customer, hasEmail: !!i.has_email, limit: 15 }); return { total_matching: r.total, rows: r.rows.map((x) => ({ id: x.id, name: x.name, city: x.city, province: x.province, email: x.email, website: x.website, customer: x.is_customer, outreach_status: x.outreach_status })) }; },
 		},
+		...(hosted ? [
+			{
+				name: 'lookup_domain', kind: 'read',
+				description: 'THE way to answer "do we host / is X a customer": looks one domain up in what we host (Cloudflare, DUDA, SmarterMail email, Hostinger), on the Customers board, and in the United Church directory. Also says how fresh the data is and which sources failed, so say so when a source is missing instead of guessing.',
+				input_schema: { type: 'object', properties: { domain: { type: 'string', description: 'e.g. erindaleunited.church' } }, required: ['domain'] },
+				run: async ({ domain }) => { const [r, st] = [await hosted.lookup(domain, store), await hosted.status()]; return { ...r, sources_last_sync: Object.fromEntries(Object.entries(st.sources).map(([k, v]) => [k, v.ok ? `ok ${v.at}` : `FAILED: ${v.error}`])), sources_never_run: Object.keys(st.configured).filter((k) => !st.sources[k]), sources_not_configured: Object.keys(st.configured).filter((k) => !st.configured[k]) }; },
+			},
+			{
+				name: 'list_hosted_domains', kind: 'read',
+				description: 'Lists domains we host, optionally filtered. gap: cloudflare, duda, smartermail, hostinger, duda-not-cloudflare, cloudflare-not-duda, mail-not-cloudflare, no-mail. Returns at most 40.',
+				input_schema: { type: 'object', properties: { q: { type: 'string' }, gap: { type: 'string' } } },
+				run: async ({ q, gap }) => { const r = await hosted.list({ q, gap, limit: 40 }); return { total_matching: r.total, counts: await hosted.counts(), domains: r.rows.map((x) => ({ domain: x.domain, cloudflare: x.in_cloudflare, duda: x.in_duda, email: x.in_smartermail, hostinger: x.in_hostinger })) }; },
+			},
+		] : []),
 		{ name: 'outreach_stats', kind: 'read', description: 'Prospect email results for the last 30 days (sent, delivered, opened, clicked, bounced, unsubscribed) and today\'s sending allowance.', input_schema: { type: 'object', properties: {} }, run: async () => (outreach ? outreach.stats() : { error: 'Outreach is not set up.' }) },
 
 		/* ---------------- changes: only after a person approves */

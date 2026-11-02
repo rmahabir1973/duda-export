@@ -19,6 +19,8 @@ import { outreachRouter, loopsWebhook } from './portal/outreachRoutes.mjs';
 import { buildTools } from './portal/assistantTools.mjs';
 import { createAssistant } from './portal/assistant.mjs';
 import { assistantRouter } from './portal/assistantRoutes.mjs';
+import { createHosted, makeDudaMcp } from './portal/hosted.mjs';
+import { hostedRouter } from './portal/hostedRoutes.mjs';
 import { createAccessGuard } from './portal/access.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -339,8 +341,14 @@ const deployClients = makeClients(configFromEnv(env));
 const deployStore = createStore(path.join(DATA_DIR, 'deploy'));
 app.use('/api/deploy', createDeployRouter({ need, store: deployStore, clients: deployClients }));
 app.use('/api/email', createEmailRouter({ need, clients: deployClients }));
+const hosted = portal && portalDb ? createHosted({ db: portalDb, clients: deployClients, duda: makeDudaMcp({ token: (env.DUDA_MCP_TOKEN || '').trim() }), dir: portal.dir, ownDomains: (env.OWN_DOMAINS || 'churchwebglobal.com,churchwebsupport.com').split(',').map((x) => x.trim()).filter(Boolean), previewDomain: deployClients.cfg.previewDomain }) : null;
+if (hosted) {
+	app.use('/api/hosted', hostedRouter({ need, hosted, store: deployStore }));
+	const hours = Number(env.HOSTED_SYNC_HOURS ?? 6);
+	if (hours > 0) { const run = () => hosted.sync().then((r) => console.log('hosted sync:', Object.entries(r).map(([k, v]) => `${k} ${v.ok ? v.count : 'failed'}`).join(', '))).catch((e) => console.error('hosted sync:', e.message)); setTimeout(run, 45000).unref(); setInterval(run, hours * 3600 * 1000).unref(); }
+}
 if (portal) {
-	const assistant = createAssistant({ tools: buildTools({ store: deployStore, clients: deployClients, dir: portal.dir, outreach, audit: portal.audit }), audit: portal.audit, clients: deployClients, env });
+	const assistant = createAssistant({ tools: buildTools({ store: deployStore, clients: deployClients, dir: portal.dir, outreach, audit: portal.audit, hosted }), audit: portal.audit, clients: deployClients, env });
 	app.use('/api/assistant', assistantRouter({ need, assistant }));
 }
 if (outreach) app.use('/api/outreach', outreachRouter({ need, outreach, loops, webhookSecret: LOOPS_WEBHOOK_SECRET }));
@@ -348,6 +356,7 @@ app.get('/email', page('email.html'));
 app.get('/deploy', page('deploy.html'));
 app.get('/directory', page('directory.html', { dbOnly: true }));
 app.get('/activity', page('activity.html', { dbOnly: true }));
+app.get('/domains', page('domains.html', { dbOnly: true }));
 app.get('/users', page('users.html', { dbOnly: true }));
 app.get('/account', page('account.html', { dbOnly: true }));
 

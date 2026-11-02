@@ -129,6 +129,16 @@ export function makeClients(cfg, deps = {}) {
 	};
 	const cloudflare = {
 		available: () => !!(cfg.cloudflareToken && cfg.cloudflareAccountId),
+		/** Every zone in the account (all pages). */
+		async zones() {
+			const out = [];
+			for (let page = 1; page <= 40; page++) {
+				const d = await cfCall('GET', `/zones?per_page=50&page=${page}&account.id=${encodeURIComponent(cfg.cloudflareAccountId)}`);
+				out.push(...(d.result || []).map((z) => ({ id: z.id, name: String(z.name || '').toLowerCase(), status: z.status })));
+				if (page >= (d.result_info?.total_pages || 1)) break;
+			}
+			return out;
+		},
 		async zoneByName(name) {
 			const d = await cfCall('GET', `/zones?name=${encodeURIComponent(name)}&account.id=${encodeURIComponent(cfg.cloudflareAccountId)}`);
 			return d.result?.[0] || null;
