@@ -10,7 +10,7 @@ const api = async (path, opts = {}) => {
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const PLAN = { website: 'Website', email: 'Website + Email' };
 const ICON = { ok: '✔', no: '✖', warn: '!', info: 'i', unknown: '?', blocked: '…', error: '!' };
-const SERVICE = { gateway: 'the AI gateway key', cloudflare: 'Cloudflare', previewDns: 'Cloudflare preview zone + Hostinger IP', postmark: 'Postmark account token', smtp: 'Postmark server token', ssh: 'Hostinger SSH', smartermail: 'SmarterMail', hostingerIp: 'Hostinger IP address' };
+const SERVICE = { gateway: 'the AI gateway key', cloudflare: 'Cloudflare', previewDns: 'Cloudflare preview zone + Hostinger IP', postmark: 'Postmark account token', smtp: 'Postmark server token', ssh: 'Hostinger SSH', smartermail: 'SmarterMail', hostingerIp: 'Hostinger IP address', hostingerApi: 'Hostinger API key' };
 const SAT = new Set(['ok', 'info', 'warn']);
 let CFG = null, cur = null, openKey = null, secret = null, msgs = {}, working = '', open_how = {};
 
@@ -33,6 +33,12 @@ $('newForm').onsubmit = async (e) => {
 	catch (er) { $('nErr').textContent = er.message; }
 };
 
+$('hostProbe').onclick = async (e) => {
+	const b = e.target; b.disabled = true; b.textContent = 'Testing…'; $('hostOut').innerHTML = '';
+	try { const r = await api('/hostinger-probe', { method: 'POST', body: '{}' }); $('hostOut').innerHTML = r.items.map((i) => `<li class="${esc(i.state)}"><span class="ic">${esc(({ ok: 'OK', no: 'Problem', error: 'Error', warn: 'Check', info: 'Note' })[i.state] || i.state)}</span><div>${esc(i.label)}${i.detail ? `<pre>${esc(i.detail)}</pre>` : ''}</div></li>`).join(''); }
+	catch (er) { $('hostOut').innerHTML = `<li class="error"><div>${esc(er.message)}</div></li>`; }
+	b.disabled = false; b.textContent = 'Test Hostinger access (read-only)';
+};
 const skipped = (s) => s.onlyPlan && s.onlyPlan !== cur.plan;
 const resultsOf = (s) => cur.stageStates[s.key].results || {};
 const firstTodo = () => {

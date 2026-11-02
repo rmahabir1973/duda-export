@@ -351,3 +351,21 @@ test('enable Postmark: sets up the domain, DNS records and one SPF using the sam
 	assert.ok(f.calls.pm.some((c) => c[0] === 'create' && c[1] === 'grace.org'));
 	assert.equal(f.recs.get('z-grace.org').filter((x) => /v=spf1/.test(x.content)).length, 1);
 });
+
+test('Hostinger access test: reads the website list, shows names and field names, never the key', async () => {
+	const calls = []; const mk = (status, data) => ({ ...makeFakeClients(), });
+	function makeFakeClients() { return {}; }
+	const f = fakes();
+	f.c.hostinger = { available: () => true, get: async (p) => { calls.push(p); return { ok: true, status: 200, data: { data: [{ domain: 'build1.churchwebglobal.com', order_id: 5, username: 'u1' }, { domain: 'build2.churchwebglobal.com' }] } }; } };
+	const t = await app(f);
+	try {
+		const r = await t.j('/hostinger-probe', 'POST', {});
+		assert.deepEqual(calls, ['/api/hosting/v1/websites']);
+		assert.equal(r.j.items[0].state, 'ok'); assert.match(r.j.items[1].detail, /build2\.churchwebglobal\.com/); assert.match(r.j.items[2].detail, /order_id/);
+		f.c.hostinger.get = async () => ({ ok: false, status: 401, data: { message: 'Unauthenticated' } });
+		const bad = await t.j('/hostinger-probe', 'POST', {});
+		assert.equal(bad.j.items[0].state, 'no'); assert.match(bad.j.items[0].detail, /HOSTINGER_API_KEY/);
+		f.c.hostinger.available = () => false;
+		assert.match((await t.j('/hostinger-probe', 'POST', {})).j.items[0].label, /No Hostinger API key/);
+	} finally { t.close(); }
+});

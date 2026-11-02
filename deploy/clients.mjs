@@ -53,6 +53,7 @@ export function configFromEnv(env = process.env) {
 		sshKey: (env.SSH_PRIVATE_KEY || '').replace(/\\n/g, '\n'), sshPassphrase: env.SSH_PASSPHRASE || '',
 		siteRoot: env.SITE_ROOT || '$HOME/domains/{host}/public_html',
 		wpCli: env.WP_CLI || 'wp',
+		hostingerApiBase: (env.HOSTINGER_API_BASE || 'https://developers.hostinger.com').replace(/\/$/, ''), hostingerApiKey: clean(env.HOSTINGER_API_KEY),
 		smartermailUrl: (() => { const u = clean(env.SMARTERMAIL_URL); return u ? (/^https?:\/\//i.test(u) ? u : 'https://' + u).replace(/\/$/, '') : ''; })(),
 		smartermailUser: clean(env.SMARTERMAIL_ADMIN_USER), smartermailPassword: String(env.SMARTERMAIL_ADMIN_PASSWORD || '').trim(),
 		smartermailDomainPath: env.SMARTERMAIL_DOMAIN_PATH || 'C:\\SmarterMail\\Domains\\{domain}', smartermailDomainAdmin: env.SMARTERMAIL_DOMAIN_ADMIN || 'postmaster',
@@ -68,6 +69,7 @@ export const configured = (cfg) => ({
 	ssh: !!(cfg.sshHost && cfg.sshUser && (cfg.sshKey || cfg.sshPassword)),
 	smartermail: !!(cfg.smartermailUrl && cfg.smartermailUser && cfg.smartermailPassword),
 	hostingerIp: !!cfg.hostingerIp,
+	hostingerApi: !!cfg.hostingerApiKey,
 });
 
 async function req(fetchFn, url, { method = 'GET', headers = {}, body, timeout = 20000 } = {}) {
@@ -226,6 +228,11 @@ export function makeClients(cfg, deps = {}) {
 		s.on('error', (e) => resolve({ open: false, error: e.code || e.message }));
 	}));
 
+	/** Hostinger's hosting API (https://developers.hostinger.com). Read calls only for now. */
+	const hostinger = {
+		available: () => !!cfg.hostingerApiKey,
+		async get(path) { return req(f, cfg.hostingerApiBase + path, { headers: { authorization: 'Bearer ' + cfg.hostingerApiKey } }); },
+	};
 	const smartermail = makeSmarterMail(cfg, { fetch: f });
-	return { cfg, gateway, cloudflare, postmark, dns: dnsClient, http, tls: tlsInfo, ssh, probe, smartermail };
+	return { cfg, gateway, cloudflare, postmark, dns: dnsClient, http, tls: tlsInfo, ssh, probe, smartermail, hostinger };
 }

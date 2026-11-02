@@ -136,6 +136,23 @@ export function createDeployRouter({ need, store, clients }) {
 		} finally { busy.delete(id); }
 	});
 
+	/** Read-only test: can the stored Hostinger API key reach the account, and what does it see? */
+	r.post('/hostinger-probe', async (req, res) => {
+		const h = clients.hostinger, out = [];
+		if (!h.available()) return res.json({ items: [{ id: 'key', label: 'No Hostinger API key on this server', state: 'no', detail: 'Add HOSTINGER_API_KEY in Railway (hPanel → Account → API).' }] });
+		const r1 = await h.get('/api/hosting/v1/websites');
+		if (r1.status === 401 || r1.status === 403) out.push({ id: 'auth', label: 'Hostinger rejected the API key', state: 'no', detail: `HTTP ${r1.status}. Create a new token in hPanel (Account → API) with hosting access and update HOSTINGER_API_KEY.` });
+		else if (!r1.ok) out.push({ id: 'auth', label: 'Couldn\'t read the website list', state: 'error', detail: `HTTP ${r1.status || 'no response'}: ${typeof r1.data === 'string' ? r1.data.slice(0, 300) : JSON.stringify(r1.data || r1.error || '').slice(0, 300)}` });
+		else {
+			const list = Array.isArray(r1.data) ? r1.data : Array.isArray(r1.data?.data) ? r1.data.data : [];
+			out.push({ id: 'auth', label: 'The Hostinger API key works', state: 'ok', detail: `${list.length} website(s) visible.` });
+			const names = list.map((w) => w.domain || w.name || w.website || '').filter(Boolean);
+			out.push({ id: 'sites', label: 'Websites on the account', state: names.length ? 'info' : 'warn', detail: names.slice(0, 60).join('\n') || 'The list came back empty or in a shape I didn\'t recognise:\n' + JSON.stringify(r1.data).slice(0, 400) });
+			if (list[0]) out.push({ id: 'shape', label: 'What each website record contains (field names only)', state: 'info', detail: Object.keys(list[0]).join(', ') });
+		}
+		res.json({ items: out });
+	});
+
 	/** Switch the church's AI Assistant off (or back on) at the gateway. */
 	r.post('/churches/:id/gateway', async (req, res) => {
 		const ch = store.get(req.params.id);
