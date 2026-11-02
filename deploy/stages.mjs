@@ -6,7 +6,34 @@ import { shq, randomPassword } from './clients.mjs';
 const item = (id, label, status, detail = '', secret = false) => (secret ? { id, label, status, detail, secret: true } : { id, label, status, detail });
 const sum = (items) => ({ ok: !items.some((i) => ['fail', 'error'].includes(i.status)), items });
 const tempHost = (ch, cfg) => `${ch.slug}.${cfg.previewDomain}`;
-const sitePath = (cfg, host) => cfg.siteRoot.replace('{host}', host);
+const resolved = new Map(); // host -> folder found over SSH
+const sitePath = (cfg, host) => resolved.get(host) || cfg.siteRoot.replace('{host}', host);
+/** Hostinger puts subdomains in different places depending on how they were made, so look in the usual ones. */
+function rootCandidates(cfg, host) {
+	const dom = cfg.previewDomain, label = host.endsWith('.' + dom) ? host.slice(0, -dom.length - 1) : '';
+	const list = [cfg.siteRoot.replace('{host}', host), `$HOME/domains/${host}/public_html`];
+	if (label) list.push(`$HOME/domains/${dom}/public_html/${label}`, `$HOME/domains/${dom}/${label}`, `$HOME/domains/${dom}/public_html/${host}`);
+	return [...new Set(list)];
+}
+/** Finds the WordPress folder for each host. Returns the hosts that could not be found. */
+async function resolveRoots(ctx, hosts) {
+	const missing = [];
+	if (!ctx.c.ssh.available()) return missing;
+	for (const host of hosts) {
+		let hit = '';
+		for (const c of rootCandidates(ctx.c.cfg, host)) {
+			try { const r = await ctx.c.ssh.exec(`test -f ${c}/wp-config.php && echo FOUND`); if (r.code === 0 && /FOUND/.test(r.out)) { hit = c; break; } } catch (e) { return [{ host, error: e.message }]; }
+		}
+		if (hit) resolved.set(host, hit); else { resolved.delete(host); missing.push({ host, tried: rootCandidates(ctx.c.cfg, host) }); }
+	}
+	return missing;
+}
+/** The site keeps its folder when its address changes, so look under the real domain first, then the preview address. */
+async function siteHost(ctx, ch) {
+	for (const h of [ch.domain, tempHost(ch, ctx.c.cfg)].filter(Boolean)) if (!(await resolveRoots(ctx, [h])).length) return h;
+	return ctx.c.ssh.available() ? null : ch.domain || tempHost(ch, ctx.c.cfg);
+}
+const noSite = (m) => item('exists', `No WordPress site found for ${m.host}`, 'fail', m.error ? 'SSH problem: ' + m.error : `Create the subdomain and copy the template site in hPanel first, then run again. Looked in:\n${m.tried.join('\n')}`);
 const mask = (cmd, secrets) => secrets.reduce((s, x) => (x ? s.split(x).join('••••••') : s), cmd);
 
 /** A WP-CLI command line that runs inside one site's folder. */
@@ -58,6 +85,8 @@ export const STAGES = [
 		manual: [{ id: 'clone', label: (ch, cfg) => `In hPanel, create the subdomain ${tempHost(ch, cfg)} and copy the template site (${cfg.templateSlug}.${cfg.previewDomain}) into it.` }],
 		async check(ctx, ch) {
 			const cfg = ctx.c.cfg, host = tempHost(ch, cfg), items = [];
+			const miss = await resolveRoots(ctx, [host]);
+			if (ctx.c.ssh.available()) items.push(miss.length ? noSite(miss[0]) : item('exists', 'The site files are in place', 'pass', sitePath(cfg, host)));
 			const a = await ctx.c.dns.a(host);
 			items.push(!a.length ? item('dns', `${host} does not resolve yet`, ctx.c.cfg.hostingerIp ? 'fail' : 'warn', 'Run this stage to add the DNS record, or add it in Cloudflare.')
 				: cfg.hostingerIp && !a.includes(cfg.hostingerIp) ? item('dns', `${host} resolves to ${a.join(', ')}`, 'warn', `Expected ${cfg.hostingerIp}. Fine if it is proxied through Cloudflare.`) : item('dns', `${host} resolves`, 'pass', a.join(', ')));
@@ -110,7 +139,10 @@ export const STAGES = [
 				['preview', 'Turn preview mode on', wpIn(cfg, host, `eval ${shq(php)}`)],
 				['flush', 'Clear caches', wpIn(cfg, host, 'cache flush')],
 			];
-			items.push(...(await runSsh(ctx, cmds, { dry, secrets: [token] })));
+			const miss = await resolveRoots(ctx, [host]);
+			if (miss.length) { items.push(noSite(miss[0]), item('skipped', 'The steps that change the site were not run', 'info', 'They need the site folder to exist.')); return sum(items); }
+			const cmds2 = cmds.map(([i, l, c]) => [i, l, c.split(cfg.siteRoot.replace('{host}', host)).join(sitePath(cfg, host))]);
+			items.push(...(await runSsh(ctx, cmds2, { dry, secrets: [token] })));
 			return sum(items);
 		},
 		async test(ctx, ch) { return this.check(ctx, ch); },
@@ -262,7 +294,9 @@ export const STAGES = [
 				['launch', 'Turn preview mode off and allow search engines', wpIn(cfg, host, `eval ${shq(php)}`)],
 				['flush', 'Clear caches and refresh links', wpIn(cfg, host, 'rewrite flush && ' + cfg.wpCli + ' cache flush')],
 			];
-			const items = await runSsh(ctx, cmds, { dry });
+			const miss = await resolveRoots(ctx, [host]);
+			if (miss.length) return sum([noSite(miss[0])]);
+			const items = await runSsh(ctx, cmds.map(([i, l, c]) => [i, l, c.split(cfg.siteRoot.replace('{host}', host)).join(sitePath(cfg, host))]), { dry });
 			items.unshift(item('note', 'Before this runs: the domain must be added in hPanel (tick the boxes below) so the site answers on it.', 'info'));
 			return sum(items);
 		},
@@ -348,9 +382,9 @@ export const STAGES = [
 			}
 			// the website's outgoing mail
 			if (!readOnly) {
-				const host = tempHost(ch, cfg);
-				const root = ch.stages.golive?.last?.ok ? d : host;
+				const root = await siteHost(ctx, ch);
 				const tok = cfg.postmarkServerToken;
+				if (!root) { items.push(noSite({ host: tempHost(ch, cfg), tried: rootCandidates(cfg, tempHost(ch, cfg)) })); return sum(items); }
 				const cmds = [
 					['smtp1', 'Send the site\'s mail through Postmark: host', wpIn(cfg, root, `config set WPMS_ON true --raw --type=constant`)],
 					['smtp2', 'mailer', wpIn(cfg, root, `config set WPMS_MAILER smtp --type=constant`)],
@@ -396,9 +430,11 @@ export const STAGES = [
 			const pw = randomPassword(16);
 			ctx.secret = { login, password: pw, email: em };
 			const php = "update_option('cwai_sv', array_merge(CWAI_StaffView::defaults(), ['enabled' => true]));";
+			const root = await siteHost(ctx, ch);
+			if (!root) return sum([noSite({ host: ch.domain, tried: rootCandidates(cfg, ch.domain) })]);
 			const cmds = [
-				['user', `Create the staff login "${login}" (Editor)`, wpIn(cfg, d, `user create ${shq(login)} ${shq(em)} --role=editor --user_pass=${shq(dry ? '<password>' : pw)} --send-email=0 --porcelain`)],
-				['staffview', 'Turn on the simplified staff view', wpIn(cfg, d, `eval ${shq(php)}`)],
+				['user', `Create the staff login "${login}" (Editor)`, wpIn(cfg, root, `user create ${shq(login)} ${shq(em)} --role=editor --user_pass=${shq(dry ? '<password>' : pw)} --send-email=0 --porcelain`)],
+				['staffview', 'Turn on the simplified staff view', wpIn(cfg, root, `eval ${shq(php)}`)],
 			];
 			items.push(...(await runSsh(ctx, cmds, { dry, secrets: [pw] })));
 			if (!dry) items.push(item('pw', 'Temporary password (copy it now: it is not saved)', 'manual', `${login}   ${pw}`, true));

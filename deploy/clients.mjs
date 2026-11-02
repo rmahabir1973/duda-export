@@ -22,23 +22,25 @@ export function errText(r, hint) {
 	return hint ? `${m} (${hint})` : m;
 }
 
+/** Pasted secrets often carry quotes, spaces, a newline or a "Bearer " prefix: strip them. */
+const clean = (v) => String(v || '').trim().replace(/^["']+|["']+$/g, '').replace(/^Bearer\s+/i, '').trim();
 export function configFromEnv(env = process.env) {
 	const list = (v) => String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
 	return {
 		gatewayUrl: (env.GATEWAY_URL || 'https://ai.churchwebglobal.com').replace(/\/$/, ''),
-		gatewayAdminKey: env.GATEWAY_ADMIN_KEY || '',
+		gatewayAdminKey: clean(env.GATEWAY_ADMIN_KEY),
 		defaultTokenCap: Number(env.DEFAULT_DAILY_TOKENS || 0),
 		defaultImageCap: Number(env.DEFAULT_DAILY_IMAGES || 0),
 		cloudflareBase: (env.CLOUDFLARE_API_BASE || 'https://api.cloudflare.com/client/v4').replace(/\/$/, ''),
-		cloudflareToken: env.CLOUDFLARE_API_TOKEN || '',
-		cloudflareAccountId: env.CLOUDFLARE_ACCOUNT_ID || '',
-		previewZoneId: env.CLOUDFLARE_PREVIEW_ZONE_ID || '',
+		cloudflareToken: clean(env.CLOUDFLARE_API_TOKEN),
+		cloudflareAccountId: clean(env.CLOUDFLARE_ACCOUNT_ID),
+		previewZoneId: clean(env.CLOUDFLARE_PREVIEW_ZONE_ID),
 		previewDomain: env.PREVIEW_DOMAIN || 'churchwebglobal.com',
 		hostingerIp: env.HOSTINGER_IP || '',
 		templateSlug: env.TEMPLATE_SLUG || 'build2',
 		postmarkBase: (env.POSTMARK_API_BASE || 'https://api.postmarkapp.com').replace(/\/$/, ''),
-		postmarkAccountToken: env.POSTMARK_ACCOUNT_TOKEN || '',
-		postmarkServerToken: env.POSTMARK_SERVER_TOKEN || '',
+		postmarkAccountToken: clean(env.POSTMARK_ACCOUNT_TOKEN),
+		postmarkServerToken: clean(env.POSTMARK_SERVER_TOKEN),
 		dudaHosts: list(env.DUDA_HOSTS).length ? list(env.DUDA_HOSTS) : undefined,
 		dudaIps: list(env.DUDA_IPS),
 		ourMxHosts: list(env.OUR_MX_HOSTS || 'mail.churchwebglobal.com'),

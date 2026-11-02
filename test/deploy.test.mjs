@@ -31,7 +31,7 @@ function fakes(over = {}) {
 		dns: { ns: async () => over.ns || ['ns1.duda.co'], a: async (d) => (over.a ? over.a(d) : ['9.9.9.9']), aaaa: async () => [], cname: async (d) => (over.cname ? over.cname(d) : []), mx: async () => over.mx || [{ exchange: 'aspmx.l.google.com', priority: 1 }], txt: async () => over.txt || [['v=spf1 include:_spf.google.com ~all']] },
 		http: { get: async (u) => over.http ? over.http(u) : { status: 200, headers: {}, location: '', text: 'Britannia United Church' } },
 		tls: async () => ({ authorized: true, validTo: 'Jan 1 2027' }),
-		ssh: { available: () => over.noSsh ? false : true, exec: async (cmd) => (calls.ssh.push(cmd), { code: 0, out: 'ok', err: '' }) },
+		ssh: { available: () => over.noSsh ? false : true, exec: async (cmd) => (calls.ssh.push(cmd), /^test -f/.test(cmd) ? (over.noFolder ? { code: 1, out: '', err: '' } : { code: 0, out: 'FOUND', err: '' }) : { code: 0, out: 'ok', err: '' }) },
 	};
 	return { c, calls, zones, recs };
 }
@@ -59,7 +59,7 @@ test('stage 1 dry run changes nothing and never shows the token; real run writes
 	const f = fakes(); const ch = createStore(tmp()).create({ name: 'Britannia United' });
 	const ctx = { c: f.c };
 	const dry = await STAGES[0].run(ctx, ch, { dry: true });
-	assert.equal(f.calls.ssh.length, 0); assert.equal(f.calls.cf.length, 0);
+	assert.ok(f.calls.ssh.every((c) => /^test -f/.test(c)), 'a dry run may only look, never change'); assert.equal(f.calls.cf.length, 0);
 	assert.ok(dry.items.every((i) => !JSON.stringify(i).includes('SECRETTOKEN')));
 	const real = await STAGES[0].run(ctx, ch, { dry: false });
 	assert.ok(f.calls.ssh.some((c) => c.includes('config set CWAI_API_KEY') && c.includes('SECRETTOKEN')));
@@ -157,3 +157,23 @@ test('Hostinger variable names are understood for SSH', () => {
 	assert.equal(configured(configFromEnv({ HOSTINGER_IP: '1.2.3.4', HOSTINGER_USERNAME: 'u' })).ssh, false);
 });
 test('every stage has a step breakdown', () => { for (const s of STAGES) assert.ok(s.steps.length >= 4, s.key); });
+
+test('a missing site folder gives one clear message instead of seven errors', async () => {
+	const f = fakes({ noFolder: true }); const ch = createStore(tmp()).create({ name: 'Grace Church' });
+	const r = await STAGES[0].run({ c: f.c }, ch, { dry: false });
+	assert.equal(r.ok, false);
+	const bad = r.items.filter((i) => i.status === 'fail' || i.status === 'error');
+	assert.equal(bad.length, 1); assert.match(bad[0].detail, /hPanel/); assert.match(bad[0].detail, /public_html/);
+	assert.ok(f.calls.ssh.every((c) => /^test -f/.test(c)), 'nothing was changed');
+});
+test('the folder is found under the main domain when the subdomain lives there', async () => {
+	const f = fakes(); const seen = [];
+	f.c.ssh.exec = async (cmd) => (seen.push(cmd), /domains\/churchwebglobal\.com\/public_html\/grace-church\/wp-config/.test(cmd) ? { code: 0, out: 'FOUND', err: '' } : /^test -f/.test(cmd) ? { code: 1, out: '', err: '' } : { code: 0, out: 'ok', err: '' });
+	const ch = createStore(tmp()).create({ name: 'Grace Church' });
+	await STAGES[0].run({ c: f.c }, ch, { dry: false });
+	assert.ok(seen.some((c) => c.startsWith('cd $HOME/domains/churchwebglobal.com/public_html/grace-church &&')), seen.join('\n'));
+});
+test('pasted tokens are cleaned', () => {
+	const c = configFromEnv({ CLOUDFLARE_API_TOKEN: ' "Bearer abc123"\n' });
+	assert.equal(c.cloudflareToken, 'abc123');
+});
