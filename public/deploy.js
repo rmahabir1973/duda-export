@@ -10,7 +10,7 @@ const api = async (path, opts = {}) => {
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const PLAN = { website: 'Website', email: 'Website + Email' };
 const ICON = { ok: '✔', no: '✖', warn: '!', info: 'i', unknown: '?', blocked: '…', error: '!' };
-const SERVICE = { gateway: 'the AI gateway key', cloudflare: 'Cloudflare', previewDns: 'Cloudflare preview zone + Hostinger IP', postmark: 'Postmark account token', smtp: 'Postmark server token', ssh: 'Hostinger SSH', smartermail: 'SmarterMail' };
+const SERVICE = { gateway: 'the AI gateway key', cloudflare: 'Cloudflare', previewDns: 'Cloudflare preview zone + Hostinger IP', postmark: 'Postmark account token', smtp: 'Postmark server token', ssh: 'Hostinger SSH', smartermail: 'SmarterMail', hostingerIp: 'Hostinger IP address' };
 const SAT = new Set(['ok', 'info', 'warn']);
 let CFG = null, cur = null, openKey = null, secret = null, msgs = {}, working = '', open_how = {};
 
