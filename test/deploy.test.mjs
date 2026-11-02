@@ -71,6 +71,7 @@ function fakes(over = {}) {
 			installWordPress: async (u, b) => { calls.hst = calls.hst || []; calls.hst.push(['wp', u, b]); wpState.installed = true; },
 			addParkedDomain: async (u, site, parked) => { calls.hst = calls.hst || []; calls.hst.push(['parked', u, site, parked]); },
 			installSsl: async (u, d) => { calls.hst = calls.hst || []; calls.hst.push(['ssl', u, d]); },
+			deleteWebsite: async (d) => { calls.hst = calls.hst || []; calls.hst.push(['delete', d]); sites.delete(d); },
 		},
 	};
 	return { c, calls, zones, recs, wpState };
@@ -422,5 +423,30 @@ test('go live: adds the real domain to the site and asks for the certificate thr
 		r = await t.j('/churches/grace-church/stages/golive/fix', 'POST', { req: 'ssl', confirm: true });
 		assert.deepEqual(f.calls.hst.find((c) => c[0] === 'ssl'), ['ssl', 'u1', 'grace.org']);
 		assert.equal(r.j.fixed[0].ok, true);
+	} finally { t.close(); }
+});
+
+test('deleting a customer: needs the short name; can also remove their preview site; refuses template and live sites', async () => {
+	const f = fakes({ sites: ['grace-church.churchwebglobal.com', 'build2.churchwebglobal.com', 'build1.churchwebglobal.com'] }); const t = await app(f);
+	try {
+		await t.j('/churches', 'POST', { name: 'Grace Church', domain: 'grace.org' });
+		let r = await t.j('/churches/grace-church', 'DELETE', { confirm: 'wrong' }); assert.equal(r.s, 400); assert.ok(t.store.get('grace-church'));
+		// a customer whose short name is a template/build site can never delete that site
+		await t.j('/churches', 'POST', { name: 'Build Two', slug: 'build2' }); await t.store.update('build2', () => {});
+		r = await t.j('/churches/build2', 'DELETE', { confirm: 'build2', deleteSite: true });
+		assert.equal(r.s, 400); assert.match(r.j.error, /template or build/); assert.ok(!(f.calls.hst || []).some((c) => c[0] === 'delete'));
+		// a live customer's site is never deleted by this button
+		await t.store.update('grace-church', (c) => { c.stages.golive = { done: true }; });
+		r = await t.j('/churches/grace-church', 'DELETE', { confirm: 'grace-church', deleteSite: true }); assert.equal(r.s, 400); assert.match(r.j.error, /is live/);
+		await t.store.update('grace-church', (c) => { c.stages.golive = { done: false }; });
+		// the normal case: remove the customer and only their own preview site
+		r = await t.j('/churches/grace-church', 'DELETE', { confirm: 'grace-church', deleteSite: true });
+		assert.equal(r.s, 200); assert.deepEqual(f.calls.hst.filter((c) => c[0] === 'delete'), [['delete', 'grace-church.churchwebglobal.com']]);
+		assert.equal(t.store.get('grace-church'), null);
+		assert.ok(f.calls.gw.some((g) => g[0] === 'revoke' && g[1] === 'grace-church'), 'the AI key is switched off');
+		// without the option the Hostinger site is left alone
+		await t.j('/churches', 'POST', { name: 'Keep Me' }); f.c.hostinger.websites = async () => [{ domain: 'keep-me.churchwebglobal.com', username: 'u1', order_id: 5 }];
+		const before = f.calls.hst.length; r = await t.j('/churches/keep-me', 'DELETE', { confirm: 'keep-me' });
+		assert.equal(r.s, 200); assert.equal(f.calls.hst.length, before);
 	} finally { t.close(); }
 });

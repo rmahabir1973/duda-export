@@ -82,9 +82,25 @@ export function createDeployRouter({ need, store, clients }) {
 		} catch (e) { res.status(400).json({ error: e.message }); }
 	});
 
-	r.delete('/churches/:id', (req, res) => {
-		if (req.body?.confirm !== req.params.id) return res.status(400).json({ error: 'Type the short name to confirm.' });
-		store.remove(req.params.id); res.json({ ok: true });
+	/** Remove a customer. Optionally also delete their PREVIEW site on Hostinger (never the template, never a live site). */
+	r.delete('/churches/:id', async (req, res) => {
+		const ch = store.get(req.params.id);
+		if (!ch) return res.status(404).json({ error: 'Customer not found.' });
+		if (req.body?.confirm !== ch.id) return res.status(400).json({ error: 'Type the short name to confirm.' });
+		const out = [];
+		if (req.body?.deleteSite) {
+			const cfg = clients.cfg, host = `${ch.slug}.${cfg.previewDomain}`, tpl = `${cfg.templateSlug}.${cfg.previewDomain}`;
+			if (host === tpl || /^build\d*$/.test(ch.slug)) return res.status(400).json({ error: `Refusing to delete ${host}: it looks like one of our template or build sites.` });
+			if (ch.stages.golive?.done) return res.status(400).json({ error: 'This customer is live. Delete the site by hand in Hostinger if you really mean to, so it can\'t happen by accident.' });
+			if (!clients.hostinger.available()) return res.status(400).json({ error: 'The Hostinger API key isn\'t set up on this server.' });
+			try {
+				const w = (await clients.hostinger.websites()).find((x) => x.domain === host);
+				if (w) { await clients.hostinger.deleteWebsite(host); out.push(`Deleted the preview site ${host} on Hostinger.`); } else out.push(`No site called ${host} was found on Hostinger.`);
+			} catch (e) { return res.status(500).json({ error: e.message }); }
+		}
+		if (clients.gateway.available()) { try { await clients.gateway.revoke(ch.slug, true); out.push('Switched the AI Assistant key off at the gateway.'); } catch { /* best effort */ } }
+		store.remove(ch.id);
+		res.json({ ok: true, out });
 	});
 
 	/** Tick or untick a "by hand" requirement. */

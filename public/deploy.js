@@ -102,7 +102,7 @@ function render() {
 	<div class="tabs">${PHASES.map((p) => { const st = phaseStats(p); return `<button class="tab ${p.id === openPhase ? 'on' : ''} ${!st.any ? 'na' : st.checked && st.done === st.total ? 'full' : ''}" data-phase="${p.id}"${!st.any ? ' disabled' : ''}>${esc(p.title)}<span class="tc">${st.any ? (st.checked ? `${st.done}/${st.total}` : '·') : 'n/a'}</span></button>`; }).join('')}</div>
 	${ph.stages.map((k) => stageHtml(stageOf(k))).join('')}
 	<section class="card"><h2>Activity</h2><div class="lg">${(c.log || []).slice().reverse().slice(0, 40).map((l) => `<div>${new Date(l.at).toLocaleString()} — ${esc(l.text)}</div>`).join('') || 'Nothing yet.'}</div>
-	<div class="btns"><button class="sm danger" id="gwOff">Switch AI Assistant off</button><button class="sm" id="gwOn">Switch it back on</button></div></section>`;
+	<div class="btns"><button class="sm danger" id="gwOff">Switch AI Assistant off</button><button class="sm" id="gwOn">Switch it back on</button><button class="sm danger" id="delProj" style="margin-left:auto">Delete this customer…</button></div></section>`;
 	wire();
 }
 
@@ -143,6 +143,7 @@ function wire() {
 	};
 	$('gwOff').onclick = () => confirm('Switch the AI Assistant off for ' + cur.name + '?') && gw(true);
 	$('gwOn').onclick = () => gw(false);
+	$('delProj').onclick = deleteCustomer;
 	$('checkAll').onclick = checkAll;
 	for (const el of document.querySelectorAll('[data-phase]')) el.onclick = async () => { openPhase = el.dataset.phase; render(); for (const k of PHASES.find((p) => p.id === openPhase).stages) if (!skipped(stageOf(k)) && !cur.stageStates[k].at) await checkStage(k, true); };
 	for (const el of document.querySelectorAll('[data-check]')) el.onclick = () => checkStage(el.dataset.check);
@@ -177,6 +178,19 @@ async function fix(key, req) {
 		if (r.secret) secret = { key, text: r.secret.boxes ? r.secret.boxes.map((b) => `${b.address}    ${b.password}`).join('\n') : `${r.secret.url ? 'Site: ' + r.secret.url + '\n' : ''}Login: ${r.secret.login}\nPassword: ${r.secret.password}${r.secret.email ? '\nEmail: ' + r.secret.email : ''}` };
 	} catch (e) { msgs[key + '.' + (req === 'all' ? s.reqs[0].id : req)] = { ok: false, detail: e.message }; }
 	working = ''; render();
+}
+async function deleteCustomer() {
+	const c = cur, host = `${c.slug}.${CFG.previewDomain}`, hasSite = c.stageStates.preview.results?.site?.state === 'ok';
+	if (!confirm(`Delete the customer "${c.name}"?\n\nThis removes the project from this board. It does not touch their current website or domain.`)) return;
+	let deleteSite = false;
+	if (hasSite) deleteSite = confirm(`Also delete the preview site ${host} on Hostinger?\n\nOK = delete the site too (use this for a mistake or a test).\nCancel = keep the site on Hostinger.`);
+	const typed = prompt(`To confirm, type the short name:\n${c.slug}`);
+	if (typed === null) return;
+	try {
+		const r = await api('/churches/' + encodeURIComponent(c.id), { method: 'DELETE', body: JSON.stringify({ confirm: typed.trim(), deleteSite }) });
+		cur = null; $('detail').hidden = true; $('listCard').hidden = false; await loadBoard();
+		if (r.out?.length) alert(r.out.join('\n'));
+	} catch (e) { alert(e.message); }
 }
 async function gw(off) { try { await api('/churches/' + cur.id + '/gateway', { method: 'POST', body: JSON.stringify({ off }) }); alert(off ? 'Switched off.' : 'Switched on.'); cur = await api('/churches/' + cur.id); render(); } catch (e) { alert(e.message); } }
 
