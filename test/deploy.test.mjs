@@ -93,35 +93,35 @@ test('slugify, store, shell quoting, SPF merge', () => {
 
 test('stage 1 tests: a fresh church shows what is missing, and later items wait for earlier ones', async () => {
 	const f = fakes(); const ch = createStore(tmp()).create({ name: 'Grace Church' });
-	const st = states(await testStage(ctxOf(f), ch, STAGES[0]));
+	const st = states(await testStage(ctxOf(f), ch, stageByKey('preview')));
 	assert.deepEqual(st, { site: 'ok', folder: 'ok', dns: 'no', plugins: 'no', plugin: 'blocked', connected: 'blocked', address: 'no', title: 'no', preview: 'blocked', oxygen: 'no' });
 	assert.ok(f.calls.ssh.every((c) => !/config set|option update|search-replace|plugin activate/.test(c)), 'testing never changes anything');
 });
 
 test('a missing site: one clear "no", everything that needs it waits, nothing is changed', async () => {
 	const f = fakes({ noFolder: true }); const ch = createStore(tmp()).create({ name: 'Grace Church' });
-	const st = states(await testStage(ctxOf(f), ch, STAGES[0]));
+	const st = states(await testStage(ctxOf(f), ch, stageByKey('preview')));
 	assert.equal(st.folder, 'no'); assert.equal(st.plugins, 'blocked'); assert.equal(st.plugin, 'blocked'); assert.equal(st.address, 'blocked'); assert.equal(st.title, 'blocked');
 	assert.ok(f.calls.ssh.every((c) => /^test -f/.test(c)));
 });
 
 test('without SSH, tests say they cannot look instead of failing', async () => {
 	const f = fakes({ noSsh: true }); const ch = createStore(tmp()).create({ name: 'Grace Church' });
-	const st = states(await testStage(ctxOf(f), ch, STAGES[0]));
+	const st = states(await testStage(ctxOf(f), ch, stageByKey('preview')));
 	assert.equal(st.folder, 'unknown'); assert.equal(st.title, 'unknown', 'items after it still show, with hand-done help');
 });
 
 test('mailbox and manual items follow the ticks', async () => {
 	const f = fakes(); const ch = createStore(tmp()).create({ name: 'Grace Church', domain: 'grace.org', plan: 'email' });
 	ch.stages.approval = { manual: { approved: true, paid: true } };
-	const st = states(await testStage(ctxOf(f), ch, STAGES[2]));
+	const st = states(await testStage(ctxOf(f), ch, stageByKey('approval')));
 	assert.deepEqual(st, { domain: 'ok', approved: 'ok', plan: 'no', paid: 'ok', registrar: 'no' });
 });
 
 test('stage 2 reports Duda, Google email and duplicate SPF as facts', async () => {
 	const f = fakes({ cname: (d) => (d.startsWith('www.') ? ['x.multiscreensite.com'] : []), txt: [['v=spf1 a ~all'], ['v=spf1 include:x.com ~all']] });
 	const ch = createStore(tmp()).create({ name: 'Grace Church', domain: 'grace.org' });
-	const res = await testStage(ctxOf(f), ch, STAGES[1]);
+	const res = await testStage(ctxOf(f), ch, stageByKey('dnscheck'));
 	assert.equal(res.web.state, 'warn'); assert.match(res.web.detail, /Duda/);
 	assert.match(res.email.detail, /Google/); assert.equal(res.spf.state, 'warn');
 });
@@ -184,25 +184,45 @@ test('stages 4 and 7 are gated until approval and DNS are done', async () => {
 	} finally { t.close(); }
 });
 
-test('stage 4: zone, records, nameserver wait, then website records, never deleting', async () => {
+test('domain setup comes first and needs no approval; the switch-over waits for approval and the nameservers', async () => {
 	const f = fakes({ a: (d) => (d === 'grace.org' ? ['9.9.9.9'] : []) }); const t = await app(f);
 	try {
 		await t.j('/churches', 'POST', { name: 'Grace Church', domain: 'grace.org' });
+		// day one: add the domain to Cloudflare and copy its records, with no approval yet
+		let r = await t.j('/churches/grace-church/stages/cloudflare/fix', 'POST', { req: 'all', confirm: true });
+		assert.equal(r.s, 200);
+		let st = states(r.j.church.stageStates.cloudflare.results);
+		assert.deepEqual(st, { zone: 'ok', records: 'ok', nsinfo: 'info' });
+		assert.match(r.j.church.stageStates.cloudflare.results.nsinfo.detail, /a\.ns\.cloudflare\.com\nb\.ns\.cloudflare\.com/);
+		assert.equal(r.j.church.stageStates.cloudflare.done, true);
+		assert.ok(f.zones.has('grace.org'));
+		// the switch-over is locked until approval
+		r = await t.j('/churches/grace-church/stages/dns/fix', 'POST', { req: 'all', confirm: true });
+		assert.equal(r.s, 409); assert.match(r.j.error, /Approval and payment/);
 		for (const id of ['approved', 'plan', 'paid', 'registrar']) await t.j('/churches/grace-church/stages/approval/manual', 'PUT', { id, value: true });
 		await t.j('/churches/grace-church/stages/approval/check', 'POST', {});
-		let r = await t.j('/churches/grace-church/stages/dns/fix', 'POST', { req: 'all', confirm: true });
-		assert.equal(r.s, 200);
-		let st = states(r.j.church.stageStates.dns.results);
-		assert.equal(st.zone, 'ok'); assert.equal(st.records, 'ok'); assert.equal(st.ns, 'no'); assert.equal(st.site, 'blocked');
+		r = await t.j('/churches/grace-church/stages/dns/fix', 'POST', { req: 'all', confirm: true });
+		st = states(r.j.church.stageStates.dns.results);
+		assert.equal(st.ns, 'no'); assert.equal(st.site, 'blocked');
 		assert.match(r.j.church.stageStates.dns.results.ns.detail, /a\.ns\.cloudflare\.com/);
 		// the church switches their nameservers
 		f.c.dns.ns = async () => ['a.ns.cloudflare.com', 'b.ns.cloudflare.com'];
 		r = await t.j('/churches/grace-church/stages/dns/fix', 'POST', { req: 'all', confirm: true });
-		st = states(r.j.church.stageStates.dns.results);
-		assert.deepEqual(st, { zone: 'ok', records: 'ok', ns: 'ok', site: 'ok' });
-		assert.ok(f.calls.cf.some((c) => c[0] === 'update' || (c[0] === 'create' && c[1] === 'A' && c[2] === 'grace.org' && c[3] === '1.2.3.4')) || f.recs.get('z-grace.org').some((x) => x.content === '1.2.3.4'));
+		assert.deepEqual(states(r.j.church.stageStates.dns.results), { ns: 'ok', site: 'ok' });
+		assert.ok(f.recs.get('z-grace.org').some((x) => x.type === 'A' && x.name === 'grace.org' && x.content === '1.2.3.4'));
 		assert.ok(!f.calls.cf.some((c) => c[0] === 'delete'));
 		assert.equal(r.j.church.stageStates.dns.done, true);
+	} finally { t.close(); }
+});
+
+test('a brand-new domain with no records has nothing to copy, and the registrar parking records are skipped', async () => {
+	const f = fakes({ cname: (d) => (d.startsWith('www.') ? ['parkingpage.namecheap.com'] : []), a: () => [], mx: [], txt: [] }); const t = await app(f);
+	try {
+		await t.j('/churches', 'POST', { name: 'New Domain', domain: 'newdomain.xyz' });
+		const r = await t.j('/churches/new-domain/stages/cloudflare/fix', 'POST', { req: 'all', confirm: true });
+		const res = r.j.church.stageStates.cloudflare.results;
+		assert.equal(res.zone.state, 'ok'); assert.equal(res.records.state, 'ok'); assert.match(res.records.detail, /Nothing to copy/);
+		assert.ok(!f.calls.cf.some((c) => c[0] === 'create' && /parkingpage/.test(c[3] || '')));
 	} finally { t.close(); }
 });
 
@@ -231,7 +251,7 @@ test('stage 7: Postmark domain, records, one SPF, verification, and the site\'s 
 	try {
 		await t.j('/churches', 'POST', { name: 'Grace Church', domain: 'grace.org' });
 		await f.c.cloudflare.createZone('grace.org'); f.recs.get('z-grace.org').push({ id: 'old', type: 'TXT', name: 'grace.org', content: 'v=spf1 include:_spf.google.com ~all' });
-		await t.store.update('grace-church', (c) => { c.stages.dns = { done: true }; });
+		await t.store.update('grace-church', (c) => { c.stages.cloudflare = { done: true }; });
 		const r = await t.j('/churches/grace-church/stages/sending/fix', 'POST', { req: 'all', confirm: true });
 		assert.equal(r.s, 200);
 		const st = states(r.j.church.stageStates.sending.results);

@@ -99,7 +99,8 @@ async function inventory(ctx, d) {
 	for (const m of await x.mx(d)) recs.push({ type: 'MX', name: d, content: String(m.exchange).replace(/\.$/, ''), priority: m.priority });
 	for (const t of await x.txt(d)) recs.push({ type: 'TXT', name: d, content: Array.isArray(t) ? t.join('') : t });
 	for (const t of await x.txt('_dmarc.' + d)) recs.push({ type: 'TXT', name: '_dmarc.' + d, content: Array.isArray(t) ? t.join('') : t });
-	return recs;
+	const parking = /parkingpage\.namecheap\.com|registrar-servers\.com|^eforward\d\./i;
+	return recs.filter((r) => !parking.test(r.content));
 }
 const isOurSite = async (ctx, d) => {
 	const r = await ctx.c.http.get(`https://${d}/wp-json/`);
@@ -265,7 +266,7 @@ export const STAGES = [
 					const { cls, facts } = await dnsInfo(ctx, ch);
 					ctx.facts = { dns: { dnsHost: cls.dnsHost, web: cls.web, email: cls.email } };
 					const where = { ours: '', 'cloudflare-pending': 'In our Cloudflare, but the church hasn\'t switched the nameservers yet', 'cloudflare-other': 'On someone else\'s Cloudflare account', duda: 'At Duda', other: 'At the registrar or another company', unknown: 'Couldn\'t tell' }[cls.dnsHost];
-					return cls.dnsHost === 'ours' ? ok('Yes: ' + (facts.ns || []).join(', ')) : info(where + ' (' + (facts.ns || []).join(', ') + '). Stage 4 moves it.');
+					return cls.dnsHost === 'ours' ? ok('Yes: ' + (facts.ns || []).join(', ')) : info(where + ' (' + (facts.ns || []).join(', ') + '). The Switch domain phase moves it.');
 				},
 			},
 			{
@@ -289,7 +290,7 @@ export const STAGES = [
 				id: 'spf', label: 'Is the SPF record healthy?', deps: ['domain'],
 				async test(ctx, ch) {
 					const { cls } = await dnsInfo(ctx, ch);
-					return cls.spf === 'duplicate' ? warn('There is more than one SPF record. Stage 7 merges them into one.') : cls.spf === 'one' ? ok('One SPF record.') : info('No SPF record yet. Stage 7 adds it.');
+					return cls.spf === 'duplicate' ? warn('There is more than one SPF record. The Email phase merges them into one.') : cls.spf === 'one' ? ok('One SPF record.') : info('No SPF record yet. The Email phase adds it.');
 				},
 			},
 		],
@@ -304,46 +305,34 @@ export const STAGES = [
 			manual('approved', 'Has the church seen the preview and approved it?', 'Tick this once the church has said yes.'),
 			manual('plan', 'Is their plan confirmed?', 'Confirm Website or Website + Email at the top of this page, then tick.'),
 			manual('paid', 'Have they paid (subscription active in Stripe)?', 'Check Stripe, then tick.'),
-			manual('registrar', 'Do we know who holds their domain registrar login?', 'You need this person to change the nameservers (stage 4).'),
+			manual('registrar', 'Do we know who holds their domain registrar login?', 'You need this person to change the nameservers (Domain setup).'),
 		],
 	},
 
 	/* ============================================================ 4 */
 	{
-		key: 'dns', n: 4, title: 'Move the domain\'s DNS to us', needs: ['approval'],
-		blurb: 'Put the church\'s domain in our Cloudflare, copy its records, get the nameservers switched, then point the website at Hostinger. Records are only ever added or changed, never deleted.',
+		key: 'dns', n: 5, title: 'Switch the domain over', needs: ['approval'],
+		blurb: 'Once the church has approved: they switch their nameservers to ours, then the website address is pointed at Hostinger. Records are only ever added or changed, never deleted.',
 		reqs: [
 			{
-				id: 'zone', label: 'Is the domain in our Cloudflare?', services: ['cloudflare'], fixLabel: 'Add it to Cloudflare',
-				async test(ctx, ch) { if (!ch.domain) return noDomain(); const z = await zoneOf(ctx, ch.domain); if (z) ctx.facts = { nameservers: z.name_servers }; return z ? ok(`Yes (${z.status})`) : no('Not in our Cloudflare yet.'); },
-				async fix(ctx, ch) { const z = await ctx.c.cloudflare.createZone(ch.domain); ctx.memo = {}; return { ok: true, detail: 'Added. The nameservers to give the church: ' + z.name_servers.join(' and ') }; },
-				howTo: (ch) => `In the Cloudflare account for churches, add the site ${ch.domain || ''}.`,
-			},
-			{
-				id: 'records', label: 'Have the church\'s existing DNS records been copied over?', services: ['cloudflare'], deps: ['zone'], fixLabel: 'Copy the records',
-				async test(ctx, ch) { const z = await zoneOf(ctx, ch.domain); const n = (await cfRecords(ctx, z.id)).length; return n ? ok(`${n} records in Cloudflare.`) : no('The zone is empty. Copy the records before the nameservers change or the church\'s email and subdomains stop working.'); },
-				async fix(ctx, ch) {
-					const z = await zoneOf(ctx, ch.domain), inv = await inventory(ctx, ch.domain);
-					const r = await applyPlan(ctx, z.id, inv.map((x) => ({ action: 'create', ...x })));
-					return { ok: true, detail: `${r.done.length} records copied from the church's current DNS. This is a best effort from public lookups: ask the church for a screenshot of their DNS to be sure nothing (verification codes, other subdomains) is missing.` };
-				},
-			},
-			{
-				id: 'ns', label: 'Has the church switched their nameservers to ours?', services: ['cloudflare'], deps: ['zone', 'records'], fixLabel: 'Ask Cloudflare to re-check',
+				id: 'ns', label: 'Has the church switched their nameservers to ours?', services: ['cloudflare'], deps: [], fixLabel: 'Ask Cloudflare to re-check',
 				async test(ctx, ch) {
-					const z = await zoneOf(ctx, ch.domain), mine = z.name_servers.map((x) => x.toLowerCase());
+					if (!ch.domain) return noDomain();
+					const z = await zoneOf(ctx, ch.domain); if (!z) return no('Add the domain to our Cloudflare first (Domain setup).');
+					const mine = z.name_servers.map((x) => x.toLowerCase());
 					const pub = (await ctx.c.dns.ns(ch.domain)).map((x) => x.toLowerCase().replace(/\.$/, ''));
 					ctx.facts = { nameservers: z.name_servers };
 					if (!pub.length || !pub.every((n) => mine.includes(n))) return no(`Not yet. Ask the church (or whoever holds the registrar login) to set the nameservers to: ${z.name_servers.join(' and ')}. Right now: ${pub.join(', ') || 'none'}.`);
 					return z.status === 'active' ? ok('Switched, and Cloudflare is active.') : no('Switched, but Cloudflare hasn\'t activated the domain yet. Press the button, then re-check in a few minutes.');
 				},
-				async fix(ctx, ch) { const z = await zoneOf(ctx, ch.domain); await ctx.c.cloudflare.activationCheck(z.id); return { ok: true, detail: 'Asked Cloudflare to re-check.' }; },
+				async fix(ctx, ch) { const z = await zoneOf(ctx, ch.domain); if (!z) return { ok: false, detail: 'The domain isn\'t in our Cloudflare yet.' }; await ctx.c.cloudflare.activationCheck(z.id); return { ok: true, detail: 'Asked Cloudflare to re-check.' }; },
 			},
 			{
-				id: 'site', label: 'Does the website address point at Hostinger?', services: ['cloudflare'], deps: ['zone', 'records', 'ns'], fixLabel: 'Point it at Hostinger',
+				id: 'site', label: 'Does the website address point at Hostinger?', services: ['cloudflare'], deps: ['ns'], fixLabel: 'Point it at Hostinger',
 				async test(ctx, ch) {
 					if (!ctx.c.cfg.hostingerIp) return unk('HOSTINGER_IP isn\'t set on this server.');
-					const z = await zoneOf(ctx, ch.domain), plan = planWebRecords({ domain: ch.domain, ip: ctx.c.cfg.hostingerIp, existing: await cfRecords(ctx, z.id) });
+					const z = await zoneOf(ctx, ch.domain); if (!z) return no('Add the domain to our Cloudflare first (Domain setup).');
+					const plan = planWebRecords({ domain: ch.domain, ip: ctx.c.cfg.hostingerIp, existing: await cfRecords(ctx, z.id) });
 					return plan.every((p) => p.action === 'keep') ? ok('The domain and www point at our server.') : no(planText(plan));
 				},
 				async fix(ctx, ch) {
@@ -371,7 +360,7 @@ export const STAGES = [
 					const host = tempHost(ch, ctx.c.cfg), w = await siteRecord(ctx, host);
 					if (!w) return { ok: false, detail: 'The preview site doesn\'t exist on Hostinger.' };
 					await ctx.c.hostinger.addParkedDomain(w.username, host, ch.domain);
-					return { ok: true, detail: `Added ${ch.domain} to the site. The domain must already point at Hostinger (stage 4). Hostinger needs a few minutes: press Re-check.` };
+					return { ok: true, detail: `Added ${ch.domain} to the site. The domain must already point at Hostinger (Domain setup). Hostinger needs a few minutes: press Re-check.` };
 				},
 				howTo: (ch) => `In Hostinger (hPanel → Websites → the church's site → Domains), add ${ch.domain || 'the domain'} and set it as primary. Then press Re-check.`,
 			},
@@ -437,7 +426,7 @@ export const STAGES = [
 				id: 'mx', label: 'Does email now go to our mail server?', services: ['cloudflare'], deps: ['boxes', 'moved'], fixLabel: 'Switch email to our server',
 				async test(ctx, ch) { if (!ch.domain) return noDomain(); const mx = (await ctx.c.dns.mx(ch.domain)).map((m) => String(m.exchange || m).toLowerCase().replace(/\.$/, '')); return mx.some((h) => ctx.c.cfg.ourMxHosts.includes(h)) ? ok(mx.join(', ')) : no(mx.length ? `Email still goes to ${mx.join(', ')}.` : 'No email records.'); },
 				async fix(ctx, ch) {
-					const z = await zoneOf(ctx, ch.domain); if (!z) return { ok: false, detail: 'The domain isn\'t in our Cloudflare yet (stage 4).' };
+					const z = await zoneOf(ctx, ch.domain); if (!z) return { ok: false, detail: 'The domain isn\'t in our Cloudflare yet (Domain setup).' };
 					const plan = planMailRecords({ domain: ch.domain, mailHost: ctx.c.cfg.mailHost, existing: await cfRecords(ctx, z.id), cutoverMx: true });
 					const r = await applyPlan(ctx, z.id, plan);
 					return { ok: !r.flagged.length, detail: [...r.done, ...r.flagged.map((f) => 'A person must remove this in Cloudflare: ' + f)].join('\n') || 'Done.' };
@@ -449,7 +438,7 @@ export const STAGES = [
 
 	/* ============================================================ 7 */
 	{
-		key: 'sending', n: 7, title: 'Sending email (Postmark)', needs: ['dns'],
+		key: 'sending', n: 7, title: 'Sending email (Postmark)', needs: ['cloudflare'],
 		blurb: 'So the church\'s website emails (forms, notices) arrive and aren\'t marked as spam.',
 		reqs: [
 			{
@@ -460,13 +449,13 @@ export const STAGES = [
 			{
 				id: 'pmdns', label: 'Are Postmark\'s DNS records in Cloudflare?', services: ['cloudflare', 'postmark'], deps: ['pm'], fixLabel: 'Add the records',
 				async test(ctx, ch) {
-					const z = await zoneOf(ctx, ch.domain); if (!z) return no('The domain isn\'t in our Cloudflare yet (stage 4).');
+					const z = await zoneOf(ctx, ch.domain); if (!z) return no('The domain isn\'t in our Cloudflare yet (Domain setup).');
 					const dom = await ctx.c.postmark.domain((await ctx.c.postmark.domainByName(ch.domain)).ID);
 					const plan = planPostmarkRecords({ domain: ch.domain, pm: dom, existing: await cfRecords(ctx, z.id) });
 					return plan.every((p) => p.action === 'keep') ? ok('DKIM and Return-Path records are there.') : no(planText(plan));
 				},
 				async fix(ctx, ch) {
-					const z = await zoneOf(ctx, ch.domain); if (!z) return { ok: false, detail: 'The domain isn\'t in our Cloudflare yet (stage 4).' };
+					const z = await zoneOf(ctx, ch.domain); if (!z) return { ok: false, detail: 'The domain isn\'t in our Cloudflare yet (Domain setup).' };
 					const dom = await ctx.c.postmark.domain((await ctx.c.postmark.domainByName(ch.domain)).ID);
 					const r = await applyPlan(ctx, z.id, planPostmarkRecords({ domain: ch.domain, pm: dom, existing: await cfRecords(ctx, z.id) }));
 					return { ok: true, detail: r.done.join('; ') || 'Already there.' };
@@ -480,7 +469,7 @@ export const STAGES = [
 					const spf = mergeSpf(existing.filter((r) => r.type === 'TXT' && /^"?v=spf1/i.test(r.content)).map((r) => r.content.replace(/^"|"$/g, '')), { includes: ['spf.mtasv.net'], hosts: ch.plan === 'email' ? [cfg.mailHost] : [] });
 					return { z, spf, plan: planMailRecords({ domain: ch.domain, mailHost: cfg.mailHost, existing, spf, dmarcRua: cfg.dmarcRua }) };
 				},
-				async test(ctx, ch) { if (!ch.domain) return noDomain(); const p = await this.plan(ctx, ch); if (!p) return no('The domain isn\'t in our Cloudflare yet (stage 4).'); return p.plan.every((x) => x.action === 'keep') ? ok('One SPF record that includes Postmark.' + (p.spf.tooManyLookups ? ' (Too many lookups: ask for help.)' : '')) : no(planText(p.plan)); },
+				async test(ctx, ch) { if (!ch.domain) return noDomain(); const p = await this.plan(ctx, ch); if (!p) return no('The domain isn\'t in our Cloudflare yet (Domain setup).'); return p.plan.every((x) => x.action === 'keep') ? ok('One SPF record that includes Postmark.' + (p.spf.tooManyLookups ? ' (Too many lookups: ask for help.)' : '')) : no(planText(p.plan)); },
 				async fix(ctx, ch) { const p = await this.plan(ctx, ch); if (!p) return { ok: false, detail: 'The domain isn\'t in our Cloudflare yet.' }; const r = await applyPlan(ctx, p.z.id, p.plan); return { ok: !r.flagged.length, detail: [...r.done, ...r.flagged.map((f) => 'A person must remove this in Cloudflare: ' + f)].join('\n') || 'Done.' }; },
 			},
 			{
@@ -500,6 +489,42 @@ export const STAGES = [
 				}),
 			},
 			manual('testmail', 'Did a test email arrive?', 'Send a test email from the website (WP Mail SMTP → Email Test) to a real inbox, check it arrived and isn\'t in spam, then tick this box.'),
+		],
+	},
+
+	/* ============================================================ domain in Cloudflare (first, safe on day one) */
+	{
+		key: 'cloudflare', n: 2, title: 'Domain in our Cloudflare', needs: [],
+		blurb: 'Adding a domain to our Cloudflare changes nothing live until the church switches its nameservers, so this can be done on day one. It also gives you the nameservers to send them when you are ready to switch.',
+		reqs: [
+			{
+				id: 'zone', label: 'Is the domain in our Cloudflare?', services: ['cloudflare'], fixLabel: 'Add it to Cloudflare',
+				async test(ctx, ch) { if (!ch.domain) return noDomain(); const z = await zoneOf(ctx, ch.domain); if (z) ctx.facts = { nameservers: z.name_servers }; return z ? ok(`Yes (${z.status})`) : no('Not in our Cloudflare yet.'); },
+				async fix(ctx, ch) { const z = await ctx.c.cloudflare.createZone(ch.domain); ctx.memo = {}; return { ok: true, detail: 'Added. The nameservers to give the church: ' + z.name_servers.join(' and ') }; },
+				howTo: (ch) => `In the Cloudflare account for churches, add the site ${ch.domain || ''}.`,
+			},
+			{
+				id: 'records', label: 'Have the church\'s existing DNS records been copied over?', services: ['cloudflare'], deps: ['zone'], fixLabel: 'Copy the records',
+				async test(ctx, ch) {
+					const z = await zoneOf(ctx, ch.domain), n = (await cfRecords(ctx, z.id)).length;
+					if (n) return ok(`${n} records in Cloudflare.`);
+					const waiting = (await inventory(ctx, ch.domain)).length;
+					return waiting ? no(`The zone is empty, but the domain has ${waiting} record(s) today. Copy them before the nameservers change, or the church's email and subdomains stop working.`) : ok('Nothing to copy: the domain has no records yet.');
+				},
+				async fix(ctx, ch) {
+					const z = await zoneOf(ctx, ch.domain), inv = await inventory(ctx, ch.domain);
+					const r = await applyPlan(ctx, z.id, inv.map((x) => ({ action: 'create', ...x })));
+					return { ok: true, detail: `${r.done.length} records copied from the church's current DNS. This is a best effort from public lookups: ask the church for a screenshot of their DNS to be sure nothing (verification codes, other subdomains) is missing.` };
+				},
+			},
+			{
+				id: 'nsinfo', label: 'Which nameservers will the church need to switch to?', services: ['cloudflare'], deps: ['zone'],
+				async test(ctx, ch) {
+					const z = await zoneOf(ctx, ch.domain); if (!z) return no('Add the domain to Cloudflare first.');
+					ctx.facts = { nameservers: z.name_servers };
+					return info(`Set these two nameservers at the registrar (for example Namecheap: Domain List → Manage → Nameservers → Custom DNS):\n${z.name_servers.join('\n')}\nDo this only when the church has approved and the new site is ready: it moves their website and email to our Cloudflare.`);
+				},
+			},
 		],
 	},
 
@@ -540,6 +565,11 @@ export const STAGES = [
 		],
 	},
 ];
+
+/** The order a customer moves through. */
+const ORDER = ['dnscheck', 'cloudflare', 'preview', 'approval', 'dns', 'golive', 'mailboxes', 'sending', 'handover'];
+STAGES.sort((a, b) => ORDER.indexOf(a.key) - ORDER.indexOf(b.key));
+STAGES.forEach((st, i) => { st.n = i + 1; });
 
 export const stageByKey = (k) => STAGES.find((s) => s.key === k);
 export const reqOf = (stage, id) => stage.reqs.find((r) => r.id === id);

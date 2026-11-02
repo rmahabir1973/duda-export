@@ -48,7 +48,7 @@ export function classifyDns(f, o = {}) {
 	if (out.dnsHost === 'ours') out.notes.push('The DNS already lives in our Cloudflare. Changes can be made directly.');
 	if (out.dnsHost === 'cloudflare-other') out.blockers.push({ level: 'warn', text: 'The domain is on someone else\'s Cloudflare account. We cannot create the zone until they move or give us access.' });
 	if (out.dnsHost === 'duda') out.blockers.push({ level: 'warn', text: 'DNS is hosted by Duda. The nameservers must be changed to ours at the registrar.' });
-	if (out.dnsHost === 'other' || out.dnsHost === 'cloudflare-pending') out.blockers.push({ level: 'info', text: 'The customer (or whoever holds the registrar login) has to change the nameservers to ours. Stage 4 shows the exact pair to give them and detects the change.' });
+	if (out.dnsHost === 'other' || out.dnsHost === 'cloudflare-pending') out.blockers.push({ level: 'info', text: 'The customer (or whoever holds the registrar login) has to change the nameservers to ours. The Domain setup phase shows the exact pair to give them and detects the change.' });
 	if (out.web === 'duda') out.notes.push('The live site is on Duda. Pointing the domain at the new site takes it off Duda, so only do it after the customer approves.');
 	if (['google', 'microsoft', 'other'].includes(out.email)) out.blockers.push({ level: 'warn', text: 'The domain already receives email at ' + out.email + '. Do NOT change the MX records until the mailboxes are created and old mail is moved, or the church loses email.' });
 	if (out.email === 'none') out.notes.push('No email is set up on this domain, so there is nothing to protect when we add ours.');

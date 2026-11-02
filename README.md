@@ -95,7 +95,7 @@ The "Batch of prospects" card takes up to 40 churches at a time, one per line: `
 
 ## Deploy a church
 
-Each customer is a **project**. The Deploy page opens on a **board**: one column per phase (Preview site → Review & approval → Domain & DNS → Go live → Email → Handover → Done), one card per customer showing progress and the next task. Add a customer when they sign up; open the card for their project page, which has a tab per phase with that phase's tasks.
+Each customer is a **project**. The Deploy page opens on a **board**: one column per phase (Domain setup → Preview site → Review & approval → Switch domain → Go live → Email → Handover → Done), one card per customer showing progress and the next task. Add a customer when they sign up; open the card for their project page, which has a tab per phase with that phase's tasks.
 
 **Hostinger is driven through its API** (`HOSTINGER_API_KEY`): create the preview site, install WordPress, add the church's real domain to the site (parked domain) and issue the certificate. Plugins are copied from the template site over SSH. Optional: `WP_ADMIN_EMAIL` (WordPress admin email when the customer has no contact email yet).
 
@@ -123,7 +123,7 @@ Open **Deploy a church** (top right of the Exporter). Add a church (name, option
 
 Open **Email setup** (top of the screen). Four steps, in this order:
 1. **Create the church's email**: enter the domain, the addresses (just the part before the @) and one default password. It adds the domain on our SmarterMail server and creates each mailbox. *Preview* shows exactly what it will do first. Passwords are never saved or shown again.
-2. **Send outgoing email through Postmark**: adds the domain at Postmark, puts DKIM, Return-Path, one merged SPF and DMARC in Cloudflare, and asks Postmark to verify. The domain must already be in our Cloudflare (Deploy page, stage 4).
+2. **Send outgoing email through Postmark**: adds the domain at Postmark, puts DKIM, Return-Path, one merged SPF and DMARC in Cloudflare, and asks Postmark to verify. The domain must already be in our Cloudflare (Deploy page, Domain setup).
 3. **Check that everything is set up**: an MX-toolbox-style read-only check (MX, mail server address, reverse DNS, ports 587/993, certificate, SPF, DKIM, DMARC, autodiscover).
 4. **Send a test email** through Postmark.
 

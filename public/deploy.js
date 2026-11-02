@@ -14,15 +14,16 @@ const SERVICE = { gateway: 'the AI gateway key', cloudflare: 'Cloudflare', previ
 const SAT = new Set(['ok', 'info', 'warn']);
 // The board and the project tabs group the stages into phases a person thinks in.
 const PHASES = [
+	{ id: 'domain', title: 'Domain setup', stages: ['dnscheck', 'cloudflare'] },
 	{ id: 'preview', title: 'Preview site', stages: ['preview'] },
-	{ id: 'approval', title: 'Review & approval', stages: ['dnscheck', 'approval'] },
-	{ id: 'domain', title: 'Domain & DNS', stages: ['dns'] },
+	{ id: 'approval', title: 'Review & approval', stages: ['approval'] },
+	{ id: 'switch', title: 'Switch domain', stages: ['dns'] },
 	{ id: 'live', title: 'Go live', stages: ['golive'] },
 	{ id: 'email', title: 'Email', stages: ['mailboxes', 'sending'] },
 	{ id: 'handover', title: 'Handover', stages: ['handover'] },
 ];
 const phaseOf = (stageKey) => PHASES.find((p) => p.stages.includes(stageKey));
-let CFG = null, cur = null, openPhase = 'preview', secret = null, msgs = {}, working = '', openHow = {};
+let CFG = null, cur = null, openPhase = 'domain', secret = null, msgs = {}, working = '', openHow = {};
 
 $('logout').onclick = async () => { await fetch('/logout', { method: 'POST', headers: H }); location.reload(); };
 
