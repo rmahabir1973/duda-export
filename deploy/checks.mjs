@@ -41,6 +41,8 @@ const siteOf = (ctx, ch) => memo(ctx, 'site', async () => {
 });
 const wpRun = (ctx, host, args) => ctx.c.ssh.exec(`cd ${sitePath(ctx.c.cfg, host)} && ${ctx.c.cfg.wpCli} ${args}`);
 const wpGet = async (ctx, host, args) => { const r = await wpRun(ctx, host, args); return r.code === 0 ? r.out.trim() : null; };
+/** Plugins made by Hostinger (matched on slug or title), or null if the list can't be read. */
+const hostingerPlugins = async (ctx, h) => { const t = await wpGet(ctx, h, 'plugin list --fields=name,title,status --format=json'); if (t === null) return null; try { return JSON.parse(t).filter((p) => /hostinger/i.test(p.name) || /hostinger/i.test(p.title || '')); } catch { return null; } };
 const handCmd = (ctx, ch, args) => `cd ${sitePath(ctx.c.cfg, tempHost(ch, ctx.c.cfg))} && ${ctx.c.cfg.wpCli} ${args}`;
 
 /** Run a test that needs the WordPress folder. */
@@ -193,6 +195,45 @@ export const STAGES = [
 					const r = await wpRun(ctx, h, 'plugin activate churchweb-ai-assistant');
 					return r.code === 0 ? { ok: true, detail: 'Activated.' } : { ok: false, detail: /could not be found|not found|doesn.t exist|does not exist/i.test(r.err + r.out) ? 'The plugin isn\'t installed on this site. Upload churchweb-ai-assistant.zip in WordPress → Plugins → Add New, then press Re-check.' : (r.err || r.out).trim().slice(-300) };
 				}),
+			},
+			{
+				id: 'hostingerPlugins', label: 'Are the Hostinger plugins removed?', services: ['ssh'], deps: ['folder'], fixLabel: 'Deactivate and delete them',
+				test: (ctx, ch) => onSite(ctx, ch, async (h) => { const l = await hostingerPlugins(ctx, h); return l === null ? unk('Couldn\'t read the plugin list.') : l.length ? no(`Still installed: ${l.map((p) => p.title || p.name).join(', ')}`) : ok('No Hostinger plugins.'); }),
+				fix: (ctx, ch) => fixOnSite(ctx, ch, [handCmd(ctx, ch, 'plugin deactivate <each Hostinger plugin>'), handCmd(ctx, ch, 'plugin delete <each Hostinger plugin>')], async (h) => {
+					const l = await hostingerPlugins(ctx, h); if (l === null) return { ok: false, detail: 'Couldn\'t read the plugin list.' };
+					const failed = [];
+					for (const p of l) {
+						if (p.status === 'active' || p.status === 'active-network') await wpRun(ctx, h, `plugin deactivate ${shq(p.name)}`);
+						const r = await wpRun(ctx, h, `plugin delete ${shq(p.name)}`); if (r.code) failed.push(p.name);
+					}
+					return { ok: !failed.length, detail: `Removed ${l.length - failed.length} Hostinger plugin(s).${failed.length ? ' Couldn\'t delete: ' + failed.join(', ') : ''}` };
+				}),
+				howTo: () => 'In WordPress → Plugins, deactivate and delete every plugin made by Hostinger (Hostinger AI, Hub, Preview Domain, Reach, Smart Auto Updates, Tools).',
+			},
+			{
+				id: 'staffview', label: 'Is the simple staff view switched on?', services: ['ssh'], deps: ['plugin'], fixLabel: 'Turn it on',
+				test: (ctx, ch) => onSite(ctx, ch, async (h) => ((await wpGet(ctx, h, `eval ${shq("$o = get_option('cwai_sv'); echo !empty($o['enabled']) ? '1' : '0';")}`)) === '1' ? ok() : no('Editors would see the full WordPress menu.'))),
+				fix: (ctx, ch) => fixOnSite(ctx, ch, [handCmd(ctx, ch, `eval ${shq("update_option('cwai_sv', array_merge(CWAI_StaffView::defaults(), ['enabled' => true]));")}`)], async (h) => {
+					const r = await wpRun(ctx, h, `eval ${shq("update_option('cwai_sv', array_merge(CWAI_StaffView::defaults(), ['enabled' => true]));")}`);
+					return r.code ? { ok: false, detail: r.err.trim().slice(-300) } : { ok: true, detail: 'Staff view is on.' };
+				}),
+			},
+			{
+				id: 'teamLogin', label: 'Is the team\'s Editor login there (so staff don\'t use the Admin login)?', services: ['ssh', 'staffLogin'], deps: ['plugin', 'staffview'], fixLabel: 'Create the Editor login',
+				test: (ctx, ch) => onSite(ctx, ch, async (h) => {
+					if (!ctx.c.cfg.staffLoginPassword) return unk('Set STAFF_LOGIN_PASSWORD in Railway first (and optionally STAFF_LOGIN_USER, default "churchweb").');
+					const u = (ctx.c.cfg.staffLoginUser || 'churchweb'), roles = await wpGet(ctx, h, `user get ${shq(u)} --field=roles`);
+					return roles === null ? no(`There is no "${u}" login on this site.`) : /editor/i.test(roles) ? ok(`${u} (Editor)`) : no(`"${u}" exists but isn't an Editor (it is: ${roles}).`);
+				}),
+				fix: (ctx, ch) => fixOnSite(ctx, ch, [handCmd(ctx, ch, `user create ${(ctx.c.cfg.staffLoginUser || 'churchweb')} <email> --role=editor --user_pass=<STAFF_LOGIN_PASSWORD> --send-email=0`)], async (h) => {
+					const cfg = ctx.c.cfg, u = cfg.staffLoginUser || 'churchweb', pw = cfg.staffLoginPassword; if (!pw) return { ok: false, detail: 'Set STAFF_LOGIN_PASSWORD in Railway first.' };
+					const email = cfg.wpAdminEmail || `${u}@${cfg.previewDomain}`;
+					const exists = (await wpGet(ctx, h, `user get ${shq(u)} --field=ID`)) !== null;
+					const r = await wpRun(ctx, h, exists ? `user update ${shq(u)} --role=editor --user_pass=${shq(pw)}` : `user create ${shq(u)} ${shq(email)} --role=editor --user_pass=${shq(pw)} --send-email=0 --porcelain`);
+					if (r.code) return { ok: false, detail: (r.err || r.out || '').split(pw).join('••••').trim().slice(-300) };
+					return { ok: true, detail: exists ? `Reset "${u}" to an Editor with the standard password.` : `Created the "${u}" Editor login with the standard password.` };
+				}),
+				howTo: (ch, cfg) => `In WordPress → Users → Add New: username ${cfg.staffLoginUser || 'churchweb'}, role Editor, and the standard staff password.`,
 			},
 			{
 				id: 'connected', label: 'Is the AI Assistant connected to our gateway?', services: ['gateway', 'ssh'], deps: ['folder', 'plugin'], fixLabel: 'Connect it',

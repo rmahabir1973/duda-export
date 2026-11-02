@@ -4,7 +4,7 @@ import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path'
 import express from 'express';
 import { createStore, slugify } from '../deploy/store.mjs';
 import { mergeSpf } from '../deploy/dnscheck.mjs';
-import { STAGES, stageByKey, testStage, blockedBy } from '../deploy/checks.mjs';
+import { STAGES, stageByKey, testStage, blockedBy, fixReq } from '../deploy/checks.mjs';
 import { createDeployRouter } from '../deploy/routes.mjs';
 import { shq, errText, configFromEnv, configured } from '../deploy/clients.mjs';
 
@@ -25,6 +25,11 @@ function fakes(over = {}) {
 		const m = /&& wp (.*)$/s.exec(cmd); const a = m ? m[1] : '';
 		const ok = (out = '') => ({ code: 0, out, err: '' }), bad = (err = 'error') => ({ code: 1, out: '', err });
 		let x;
+		if (/^plugin list --fields=name,title,status/.test(a)) return ok(JSON.stringify(wpState.plugins || []));
+		if ((x = /^plugin deactivate '([^']+)'/.exec(a))) { const p = (wpState.plugins || []).find((q) => q.name === x[1]); if (p) p.status = 'inactive'; return ok(); }
+		if ((x = /^plugin delete '([^']+)'/.exec(a))) { if (over.deleteFails) return bad('Error: could not delete'); wpState.plugins = (wpState.plugins || []).filter((q) => q.name !== x[1]); return ok(); }
+		if ((x = /^user get '([^']+)' --field=(roles|ID)/.exec(a))) { const u = (wpState.wpUsers ||= {})[x[1]]; return u ? ok(x[2] === 'roles' ? u.role : '9') : bad('Error: Invalid user'); }
+		if ((x = /^user update '([^']+)' --role=(\w+) --user_pass='([^']*)'/.exec(a))) { (wpState.wpUsers ||= {})[x[1]] = { role: x[2], pass: x[3] }; return ok(); }
 		if (/^plugin list --status=active --field=name/.test(a)) return ok((/build2/.test(cmd) ? TPL : wpState.activePlugins.map((n) => n.replace('copied:', ''))).join('\n'));
 		if ((x = /^plugin is-active/.exec(a))) return wpState.active ? ok() : bad();
 		if ((x = /^plugin activate/.exec(a))) { if (over.pluginMissing) return bad('Error: The plugin could not be found.'); const names = [...a.matchAll(/'([^']+)'|(churchweb-ai-assistant)/g)].map((q) => q[1] || q[2]); if (names.includes('churchweb-ai-assistant')) wpState.active = true; return ok(); }
@@ -38,6 +43,7 @@ function fakes(over = {}) {
 		if (/cwai_sv/.test(a) && /get_option/.test(a)) return ok(wpState.sv);
 		if (/cwai_sv/.test(a)) { wpState.sv = '1'; return ok(); }
 		if (/^user list/.test(a)) return ok(wpState.users);
+		if ((x = /^user create '([^']*)' '[^']*' --role=(\w+) --user_pass='([^']*)'/.exec(a))) { wpState.users = x[1]; (wpState.wpUsers ||= {})[x[1]] = { role: x[2], pass: x[3] }; return ok('7'); }
 		if ((x = /^user create '([^']*)'/.exec(a))) { wpState.users = x[1]; return ok('7'); }
 		return ok();
 	};
@@ -94,7 +100,7 @@ test('slugify, store, shell quoting, SPF merge', () => {
 test('stage 1 tests: a fresh church shows what is missing, and later items wait for earlier ones', async () => {
 	const f = fakes(); const ch = createStore(tmp()).create({ name: 'Grace Church' });
 	const st = states(await testStage(ctxOf(f), ch, stageByKey('preview')));
-	assert.deepEqual(st, { site: 'ok', folder: 'ok', dns: 'no', plugins: 'no', plugin: 'blocked', connected: 'blocked', address: 'no', title: 'no', preview: 'blocked', oxygen: 'no' });
+	assert.deepEqual(st, { site: 'ok', folder: 'ok', dns: 'no', plugins: 'no', plugin: 'blocked', hostingerPlugins: 'ok', staffview: 'blocked', teamLogin: 'blocked', connected: 'blocked', address: 'no', title: 'no', preview: 'blocked', oxygen: 'no' });
 	assert.ok(f.calls.ssh.every((c) => !/config set|option update|search-replace|plugin activate/.test(c)), 'testing never changes anything');
 });
 
@@ -136,13 +142,13 @@ async function app(f, store = createStore(tmp())) {
 }
 
 test('"fix everything" repairs stage 1 in order, never leaks the key, and re-tests to confirm', async () => {
-	const f = fakes(); const t = await app(f);
+	const f = fakes({ cfg: { staffLoginPassword: 'Dummy-Staff-Pass-1!@#' } }); const t = await app(f);
 	try {
 		await t.j('/churches', 'POST', { name: 'Grace Church', domain: 'grace.org' });
 		let r = await t.j('/churches/grace-church/stages/preview/fix', 'POST', { req: 'all' }); assert.equal(r.s, 400, 'must confirm');
 		r = await t.j('/churches/grace-church/stages/preview/fix', 'POST', { req: 'all', confirm: true }); assert.equal(r.s, 200);
 		const res = r.j.church.stageStates.preview.results;
-		assert.deepEqual(states(res), { site: 'ok', folder: 'ok', dns: 'ok', plugins: 'ok', plugin: 'ok', connected: 'ok', address: 'ok', title: 'ok', preview: 'ok', oxygen: 'no' });
+		assert.deepEqual(states(res), { site: 'ok', folder: 'ok', dns: 'ok', plugins: 'ok', plugin: 'ok', hostingerPlugins: 'ok', staffview: 'ok', teamLogin: 'ok', connected: 'ok', address: 'ok', title: 'ok', preview: 'ok', oxygen: 'no' });
 		assert.equal(f.wpState.cfg.CWAI_API_KEY, 'cwai_grace-church_SECRETTOKEN');
 		assert.equal(f.wpState.siteurl, 'https://grace-church.churchwebglobal.com');
 		assert.equal(f.wpState.blogname, 'Grace Church'); assert.equal(f.wpState.blog_public, '0');
@@ -416,7 +422,7 @@ test('a brand-new customer: creates the site on Hostinger, installs WordPress, c
 		assert.equal(wp[2].credentials.login, 'cwadmin'); assert.equal(wp[2].credentials.email, 'ops@example.com'); assert.ok(wp[2].credentials.password.length >= 16);
 		assert.equal(r.j.secret.password, wp[2].credentials.password, 'the new site login is shown once');
 		assert.ok(!JSON.stringify(t.store.get('grace-church')).includes(wp[2].credentials.password), 'and never stored');
-		assert.deepEqual(states(r.j.church.stageStates.preview.results), { site: 'ok', folder: 'ok', dns: 'ok', plugins: 'ok', plugin: 'ok', connected: 'ok', address: 'ok', title: 'ok', preview: 'ok', oxygen: 'no' });
+		assert.deepEqual(states(r.j.church.stageStates.preview.results), { site: 'ok', folder: 'ok', dns: 'ok', plugins: 'ok', plugin: 'ok', hostingerPlugins: 'ok', staffview: 'ok', teamLogin: 'unknown', connected: 'ok', address: 'ok', title: 'ok', preview: 'ok', oxygen: 'no' });
 		assert.deepEqual(f.wpState.activePlugins.filter((x) => x.startsWith('copied:')).sort(), ['copied:churchweb-ai-assistant', 'copied:oxygen', 'copied:seo-by-rank-math']);
 	} finally { t.close(); }
 });
@@ -483,4 +489,44 @@ test('"fix everything" keeps going past a failed fix; only the items that depend
 		assert.equal(st.preview, 'ok', 'preview mode was still fixed');
 		assert.equal(r.j.fixed.find((x) => x.id === 'connected').ok, false);
 	} finally { t.close(); }
+});
+
+
+// ---------------------------------------------------------------- Hostinger plugins + team Editor login (Preview stage)
+const HOST_PLUGINS = () => [{ name: 'hostinger-ai-assistant', title: 'Hostinger AI', status: 'inactive' }, { name: 'hostinger-easy-onboarding', title: 'Hostinger Hub', status: 'active' }, { name: 'hostinger-preview-domain', title: 'Hostinger Preview Domain', status: 'inactive' }, { name: 'churchweb-ai-assistant', title: 'ChurchWeb AI Assistant', status: 'active' }, { name: 'oxygen', title: 'Oxygen', status: 'active' }];
+
+test('Hostinger plugins: found by name or title, deactivated then deleted, and nothing else is touched', async () => {
+	const f = fakes({ wp: { active: true, activePlugins: ['churchweb-ai-assistant', 'oxygen', 'seo-by-rank-math'], plugins: HOST_PLUGINS() }, cfg: { staffLoginUser: 'churchweb', staffLoginPassword: 'Dummy-Staff-Pass-1!@#' } });
+	const ch = createStore(tmp()).create({ name: 'Grace Church' }), stage = stageByKey('preview'), req = stage.reqs.find((q) => q.id === 'hostingerPlugins');
+	const t = await testStage(ctxOf(f), ch, stage); assert.equal(t.hostingerPlugins.state, 'no'); assert.match(t.hostingerPlugins.detail, /Hostinger AI.*Hostinger Hub.*Hostinger Preview Domain/);
+	const out = await fixReq(ctxOf(f), ch, stage, req, t.hostingerPlugins); assert.equal(out.ok, true); assert.match(out.detail, /Removed 3/);
+	assert.ok(f.calls.ssh.some((c) => /plugin deactivate 'hostinger-easy-onboarding'/.test(c)), 'an active one is deactivated first');
+	assert.ok(!f.calls.ssh.some((c) => /plugin (deactivate|delete) '(oxygen|churchweb-ai-assistant)'/.test(c)), 'our plugins are never touched');
+	assert.equal((await testStage(ctxOf(f), ch, stage)).hostingerPlugins.state, 'ok');
+	const bad = fakes({ wp: { plugins: HOST_PLUGINS() }, deleteFails: true }); const r2 = await fixReq(ctxOf(bad), ch, stage, req, { state: 'no' });
+	assert.equal(r2.ok, false); assert.match(r2.detail, /Couldn't delete/);
+});
+
+test('team Editor login: waits for the staff view, is created as an Editor with the standard password, and the password never appears in errors or the test', async () => {
+	const PW = 'Dummy-Staff-Pass-1!@#';
+	const f = fakes({ wp: { active: true, activePlugins: ['churchweb-ai-assistant', 'oxygen', 'seo-by-rank-math'], plugins: [] }, cfg: { staffLoginUser: 'churchweb', staffLoginPassword: PW } });
+	const ch = createStore(tmp()).create({ name: 'Grace Church' }), stage = stageByKey('preview'), q = (id) => stage.reqs.find((x) => x.id === id);
+	let t = await testStage(ctxOf(f), ch, stage); assert.equal(t.staffview.state, 'no'); assert.equal(t.teamLogin.state, 'blocked', 'waits for the staff view');
+	assert.equal((await fixReq(ctxOf(f), ch, stage, q('staffview'), t.staffview)).ok, true);
+	t = await testStage(ctxOf(f), ch, stage); assert.equal(t.staffview.state, 'ok'); assert.equal(t.teamLogin.state, 'no'); assert.match(t.teamLogin.detail, /no "churchweb" login/i);
+	const out = await fixReq(ctxOf(f), ch, stage, q('teamLogin'), t.teamLogin); assert.equal(out.ok, true); assert.match(out.detail, /Created the "churchweb" Editor login/);
+	assert.ok(f.calls.ssh.some((c) => /user create 'churchweb' '[^']+' --role=editor --user_pass='Dummy-Staff-Pass-1!@#'/.test(c)));
+	t = await testStage(ctxOf(f), ch, stage); assert.equal(t.teamLogin.state, 'ok'); assert.ok(!JSON.stringify(t).includes(PW));
+	// exists but with the wrong role: it is corrected, not duplicated
+	f.calls.ssh.length = 0; const g = fakes({ wp: { active: true, sv: '1', activePlugins: ['churchweb-ai-assistant', 'oxygen', 'seo-by-rank-math'], wpUsers: { churchweb: { role: 'subscriber', pass: 'x' } } }, cfg: { staffLoginPassword: PW } });
+	t = await testStage(ctxOf(g), ch, stage); assert.equal(t.teamLogin.state, 'no'); assert.match(t.teamLogin.detail, /isn't an Editor/);
+	await fixReq(ctxOf(g), ch, stage, q('teamLogin'), t.teamLogin); assert.equal((await testStage(ctxOf(g), ch, stage)).teamLogin.state, 'ok');
+	assert.ok(g.calls.ssh.some((c) => /user update 'churchweb' --role=editor/.test(c)) && !g.calls.ssh.some((c) => /user create/.test(c)));
+});
+
+test('team Editor login: with no STAFF_LOGIN_PASSWORD set it explains what to set and creates nothing', async () => {
+	const f = fakes({ wp: { active: true, sv: '1', activePlugins: ['churchweb-ai-assistant', 'oxygen', 'seo-by-rank-math'] }, cfg: {} }); const ch = createStore(tmp()).create({ name: 'Grace Church' }), stage = stageByKey('preview');
+	const t = await testStage(ctxOf(f), ch, stage); assert.equal(t.teamLogin.state, 'unknown'); assert.match(t.teamLogin.detail, /STAFF_LOGIN_PASSWORD/);
+	const out = await fixReq(ctxOf(f), ch, stage, stage.reqs.find((x) => x.id === 'teamLogin'), t.teamLogin);
+	assert.equal(out.ok, false); assert.ok(!f.calls.ssh.some((c) => /user create|user update/.test(c)));
 });
