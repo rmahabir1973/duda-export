@@ -20,7 +20,7 @@ export function createDeployRouter({ need, store, clients }) {
 	};
 	const meta = () => STAGES.map((s) => ({
 		key: s.key, n: s.n, title: s.title, blurb: s.blurb, needs: s.needs, onlyPlan: s.onlyPlan || null,
-		manual: s.manual.map((m) => ({ id: m.id })), 
+		manual: s.manual.map((m) => ({ id: m.id })), steps: s.steps,
 	}));
 	const manualLabels = (c, cfg) => Object.fromEntries(STAGES.map((s) => [s.key, s.manual.map((m) => ({ id: m.id, label: m.label(c, cfg, c.facts?.[s.key]) }))]));
 

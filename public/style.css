@@ -51,3 +51,16 @@ ul.res { list-style: none; padding: 0; margin: 8px 0; } ul.res li { padding: 6px
 .lg { font-size: 12.5px; color: var(--muted); max-height: 160px; overflow: auto; }
 @media (max-width: 700px) { .row3 { grid-template-columns: 1fr; } }
 .chk { font-weight: 400; }
+
+ol.steps { list-style: none; padding: 0; margin: 12px 0 0; }
+li.step { border-top: 1px solid var(--line); padding: 8px 0; }
+.sh { display: flex; gap: 10px; align-items: center; }
+.sn { width: 22px; height: 22px; border-radius: 50%; background: #efe6f1; color: var(--p); font-size: 12px; font-weight: 700; display: grid; place-items: center; flex: none; }
+.sl { flex: 1; }
+.tag { font-size: 11px; font-weight: 700; border-radius: 10px; padding: 2px 8px; flex: none; }
+.tag.auto { background: #dff5e3; color: #17692e; } .tag.hand { background: #fff4d6; color: #7a5a00; } .tag.chk { background: #e8eefc; color: #234; }
+.rs { font-size: 11px; font-weight: 700; flex: none; width: 70px; text-align: right; }
+.rs.pass, .rs.done { color: #17692e; } .rs.fail, .rs.error { color: #8a1f1f; } .rs.warn, .rs.manual { color: #7a5a00; } .rs.info, .rs.planned { color: #335; }
+.need { color: #8a1f1f; background: #fdeeee; border-radius: 6px; padding: 6px 10px; font-size: 13px; margin: 6px 0 0 32px; }
+p.need { margin: 8px 0; }
+ul.res.sub { margin: 6px 0 0 32px; }

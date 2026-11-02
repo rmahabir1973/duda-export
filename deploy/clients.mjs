@@ -13,6 +13,15 @@ export const randomPassword = (n = 16) => {
 	return out + '!7'; // satisfies common complexity rules
 };
 
+/** Turn any service error body (string, {message}, {error:{message}}, Cloudflare errors[]) into plain text. */
+export function errText(r, hint) {
+	const d = r?.data; let m = '';
+	if (typeof d === 'string') m = d.slice(0, 200);
+	else if (d) m = (typeof d.error === 'string' ? d.error : d.error?.message) || d.Message || d.message || (Array.isArray(d.errors) && d.errors.map((e) => e.message).join('; ')) || '';
+	if (!m) m = r?.error || 'HTTP ' + (r?.status ?? '?');
+	return hint ? `${m} (${hint})` : m;
+}
+
 export function configFromEnv(env = process.env) {
 	const list = (v) => String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
 	return {
@@ -36,7 +45,7 @@ export function configFromEnv(env = process.env) {
 		mailHost: env.MAIL_HOST || 'mail.churchwebglobal.com',
 		dmarcRua: env.DMARC_RUA || '',
 		dnsServers: list(env.DNS_SERVERS).length ? list(env.DNS_SERVERS) : ['1.1.1.1', '8.8.8.8'],
-		sshHost: env.SSH_HOST || '', sshPort: Number(env.SSH_PORT || 22), sshUser: env.SSH_USER || '',
+		sshHost: env.SSH_HOST || env.HOSTINGER_SSH_HOST || env.HOSTINGER_IP || '', sshPort: Number(env.SSH_PORT || env.HOSTINGER_PORT || 22), sshUser: env.SSH_USER || env.HOSTINGER_USERNAME || '', sshPassword: env.SSH_PASSWORD || env.HOSTINGER_PASSWORD || '',
 		sshKey: (env.SSH_PRIVATE_KEY || '').replace(/\\n/g, '\n'), sshPassphrase: env.SSH_PASSPHRASE || '',
 		siteRoot: env.SITE_ROOT || '$HOME/domains/{host}/public_html',
 		wpCli: env.WP_CLI || 'wp',
@@ -50,7 +59,7 @@ export const configured = (cfg) => ({
 	previewDns: !!(cfg.cloudflareToken && cfg.previewZoneId && cfg.hostingerIp),
 	postmark: !!cfg.postmarkAccountToken,
 	smtp: !!cfg.postmarkServerToken,
-	ssh: !!(cfg.sshHost && cfg.sshUser && cfg.sshKey),
+	ssh: !!(cfg.sshHost && cfg.sshUser && (cfg.sshKey || cfg.sshPassword)),
 	smartermail: cfg.smartermailReady,
 	hostingerIp: !!cfg.hostingerIp,
 });
@@ -71,26 +80,27 @@ async function req(fetchFn, url, { method = 'GET', headers = {}, body, timeout =
 export function makeClients(cfg, deps = {}) {
 	const f = deps.fetch || globalThis.fetch;
 
+	const gwErr = (r) => errText(r, r.status === 404 ? 'the live gateway does not have the new admin endpoints yet: deploy cwai-gateway.zip' : r.status === 401 ? 'wrong GATEWAY_ADMIN_KEY' : r.status === 0 ? 'cannot reach ' + cfg.gatewayUrl : '');
 	const gateway = {
 		available: () => !!cfg.gatewayAdminKey,
 		async mint(site) {
 			const r = await req(f, `${cfg.gatewayUrl}/v1/admin/mint`, { method: 'POST', headers: { 'x-admin-key': cfg.gatewayAdminKey }, body: { site } });
-			if (!r.ok) throw new Error('Gateway: ' + (r.data?.error || r.error || 'HTTP ' + r.status));
+			if (!r.ok) throw new Error('Gateway: ' + gwErr(r));
 			return r.data; // {site, token, revoked}
 		},
 		async site(site) {
 			const r = await req(f, `${cfg.gatewayUrl}/v1/admin/site?site=${encodeURIComponent(site)}`, { headers: { 'x-admin-key': cfg.gatewayAdminKey } });
-			if (!r.ok) throw new Error('Gateway: ' + (r.data?.error || r.error || 'HTTP ' + r.status));
+			if (!r.ok) throw new Error('Gateway: ' + gwErr(r));
 			return r.data;
 		},
 		async setCap(site, tokens, images) {
 			const r = await req(f, `${cfg.gatewayUrl}/v1/admin/cap`, { method: 'PUT', headers: { 'x-admin-key': cfg.gatewayAdminKey }, body: { site, tokens, images } });
-			if (!r.ok) throw new Error('Gateway: ' + (r.data?.error || r.error || 'HTTP ' + r.status));
+			if (!r.ok) throw new Error('Gateway: ' + gwErr(r));
 			return r.data;
 		},
 		async revoke(site, revoked = true) {
 			const r = await req(f, `${cfg.gatewayUrl}/v1/admin/revoke`, { method: 'PUT', headers: { 'x-admin-key': cfg.gatewayAdminKey }, body: { site, revoked } });
-			if (!r.ok) throw new Error('Gateway: ' + (r.data?.error || r.error || 'HTTP ' + r.status));
+			if (!r.ok) throw new Error('Gateway: ' + gwErr(r));
 			return r.data;
 		},
 		/** Does this token work? Uses the same call the plugin makes. */
@@ -103,7 +113,10 @@ export function makeClients(cfg, deps = {}) {
 	const cfH = () => ({ authorization: 'Bearer ' + cfg.cloudflareToken });
 	const cfCall = async (method, path, body) => {
 		const r = await req(f, cfg.cloudflareBase + path, { method, headers: cfH(), body });
-		if (!r.ok || r.data?.success === false) throw new Error('Cloudflare: ' + (r.data?.errors?.map((e) => e.message).join('; ') || r.error || 'HTTP ' + r.status));
+		if (!r.ok || r.data?.success === false) {
+			const auth = r.status === 401 || r.status === 403 || (r.data?.errors || []).some((e) => [9109, 10000].includes(e.code));
+			throw new Error('Cloudflare: ' + errText(r, auth ? 'the API token cannot access this zone or account: create ONE token that includes both Cloudflare accounts, with Zone Edit, DNS Edit and Zone Read' : ''));
+		}
 		return r.data;
 	};
 	const cloudflare = {
@@ -134,7 +147,7 @@ export function makeClients(cfg, deps = {}) {
 	const pmH = () => ({ 'x-postmark-account-token': cfg.postmarkAccountToken });
 	const pmCall = async (method, path, body) => {
 		const r = await req(f, cfg.postmarkBase + path, { method, headers: pmH(), body });
-		if (!r.ok) throw new Error('Postmark: ' + (r.data?.Message || r.error || 'HTTP ' + r.status));
+		if (!r.ok) throw new Error('Postmark: ' + errText(r, r.status === 401 ? 'check POSTMARK_ACCOUNT_TOKEN: it must be the Account token, not a Server token' : ''));
 		return r.data;
 	};
 	const postmark = {
@@ -177,7 +190,7 @@ export function makeClients(cfg, deps = {}) {
 
 	// Run commands on the Hostinger account over SSH (ssh2 is loaded only when it is used).
 	const ssh = deps.ssh || {
-		available: () => !!(cfg.sshHost && cfg.sshUser && cfg.sshKey),
+		available: () => !!(cfg.sshHost && cfg.sshUser && (cfg.sshKey || cfg.sshPassword)),
 		async exec(cmd, { timeout = 120000 } = {}) {
 			const { Client } = await import('ssh2');
 			return new Promise((resolve, reject) => {
@@ -188,7 +201,7 @@ export function makeClients(cfg, deps = {}) {
 					stream.on('data', (d) => (out += d)).stderr.on('data', (d) => (err += d));
 					stream.on('close', (code) => { clearTimeout(timer); c.end(); resolve({ code, out, err }); });
 				})).on('error', (e) => { clearTimeout(timer); reject(e); })
-					.connect({ host: cfg.sshHost, port: cfg.sshPort, username: cfg.sshUser, privateKey: cfg.sshKey, passphrase: cfg.sshPassphrase || undefined, readyTimeout: 15000 });
+					.connect({ host: cfg.sshHost, port: cfg.sshPort, username: cfg.sshUser, ...(cfg.sshKey ? { privateKey: cfg.sshKey, passphrase: cfg.sshPassphrase || undefined } : { password: cfg.sshPassword }), readyTimeout: 15000 });
 			});
 		},
 	};

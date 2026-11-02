@@ -438,3 +438,71 @@ export function blockedBy(ch, stage) {
 	if (stage.onlyPlan && ch.plan !== stage.onlyPlan) out.push('plan');
 	return out;
 }
+
+/* ---- The plain-language breakdown shown for every stage: what happens, who does it, and what it needs. ----
+   how: auto (the app does it) | manual (a person does it, tick the box) | check (read-only look)
+   needs: services that must be set up for the app to do it (otherwise it is shown as a hand-done instruction).
+   ids: result items that belong to this step. */
+const STEPS = {
+	preview: [
+		{ label: 'Create the subdomain and copy the template site in hPanel', how: 'manual', manualId: 'clone', note: 'Hostinger → Websites → add the subdomain, then copy the template site into it.' },
+		{ label: 'Add the preview address in DNS', how: 'auto', needs: ['previewDns'], ids: ['dns', 'rec'] },
+		{ label: 'Create this site\'s AI Assistant key at the gateway', how: 'auto', needs: ['gateway'], ids: ['token'] },
+		{ label: 'Set the daily usage limit', how: 'auto', needs: ['gateway'], ids: ['cap'] },
+		{ label: 'Check the site files are in place', how: 'auto', needs: ['ssh'], ids: ['exists'] },
+		{ label: 'Write the key and gateway address into wp-config', how: 'auto', needs: ['ssh'], ids: ['key', 'base'] },
+		{ label: 'Change the site address to the preview address', how: 'auto', needs: ['ssh'], ids: ['address'] },
+		{ label: 'Set the site title and turn preview mode on', how: 'auto', needs: ['ssh'], ids: ['title', 'preview', 'flush'] },
+		{ label: 'Check: the preview loads, is hidden from search engines, and the key is accepted', how: 'check', ids: ['http', 'name', 'plugin'] },
+	],
+	dnscheck: [
+		{ label: 'Find where the domain\'s DNS is hosted', how: 'check', ids: ['dns', 'cf'] },
+		{ label: 'See where the website points (Duda, ours, other)', how: 'check', ids: ['web'] },
+		{ label: 'See where email goes today', how: 'check', ids: ['email'] },
+		{ label: 'Check the SPF record', how: 'check', ids: ['spf'] },
+		{ label: 'Blockers and warnings found', how: 'check', ids: ['blocker', 'warning', 'note'] },
+	],
+	approval: [
+		{ label: 'The church has seen the preview and approved it', how: 'manual', manualId: 'approved' },
+		{ label: 'Plan confirmed', how: 'manual', manualId: 'plan' },
+		{ label: 'Payment received', how: 'manual', manualId: 'paid' },
+		{ label: 'We know who holds the registrar login', how: 'manual', manualId: 'registrar' },
+	],
+	dns: [
+		{ label: 'Add the domain to our Cloudflare', how: 'auto', needs: ['cloudflare'], ids: ['zone'] },
+		{ label: 'Copy the existing DNS records so nothing breaks', how: 'auto', needs: ['cloudflare'], ids: ['inv'] },
+		{ label: 'Church changes their nameservers at their registrar', how: 'manual', manualId: 'ns', note: 'Skip if the DNS is already ours.' },
+		{ label: 'Detect that the nameservers changed', how: 'check', needs: ['cloudflare'], ids: ['ns', 'zonestatus'] },
+		{ label: 'Point the website at Hostinger (records added or changed, never deleted)', how: 'auto', needs: ['cloudflare'], ids: ['rec', 'web', 'duda', 'ip'] },
+	],
+	golive: [
+		{ label: 'Add the domain to the site in Hostinger and set it as primary', how: 'manual', manualId: 'hostinger' },
+		{ label: 'Make sure the SSL certificate is issued', how: 'manual', manualId: 'ssl' },
+		{ label: 'Change every address from the preview address to the real domain', how: 'auto', needs: ['ssh'], ids: ['exists', 'address', 'home', 'siteurl'] },
+		{ label: 'Turn preview mode off and allow search engines', how: 'auto', needs: ['ssh'], ids: ['launch', 'flush'] },
+		{ label: 'Check: loads, SSL valid, no preview banner, www works, robots and sitemap fine', how: 'check', ids: ['http', 'ssl', 'preview', 'banner', 'name', 'www', 'robots', 'sitemap'] },
+	],
+	mailboxes: [
+		{ label: 'Add the domain to SmarterMail', how: 'manual', manualId: 'domain' },
+		{ label: 'Create the mailboxes (temporary passwords are generated and shown once)', how: 'manual', manualId: 'boxes', ids: ['boxes', 'how'] },
+		{ label: 'Move any old email across', how: 'manual', manualId: 'moved' },
+		{ label: 'Switch the MX records to our mail server (blocked until the two steps above are ticked)', how: 'auto', needs: ['cloudflare'], manualId: 'mx', ids: ['gate', 'rec'] },
+		{ label: 'Check: MX points at our server', how: 'check', ids: ['mx', 'api', 'plan'] },
+	],
+	sending: [
+		{ label: 'Add the domain to Postmark', how: 'auto', needs: ['postmark'], ids: ['pm'] },
+		{ label: 'Add the DKIM, Return-Path, SPF (merged into one) and DMARC records', how: 'auto', needs: ['cloudflare', 'postmark'], ids: ['rec', 'zone', 'spflimit'] },
+		{ label: 'Ask Postmark to verify them', how: 'auto', needs: ['postmark'], ids: ['dkim', 'rp', 'spfv', 'dkimv', 'rpv'] },
+		{ label: 'Point the website\'s outgoing mail at Postmark', how: 'auto', needs: ['ssh', 'smtp'], ids: ['smtp1', 'smtp2', 'smtp3', 'smtp4', 'smtp5', 'smtp6'] },
+		{ label: 'Send a test email', how: 'auto', needs: ['ssh', 'smtp'], ids: ['test'] },
+	],
+	handover: [
+		{ label: 'Create the church\'s Editor login with the simplified staff view (password shown once)', how: 'auto', needs: ['ssh'], ids: ['user', 'staffview', 'pw', 'email'] },
+		{ label: 'Check the login page works and the AI Assistant is active', how: 'check', ids: ['login', 'gw'] },
+		{ label: 'Welcome email sent to the church contact', how: 'manual', manualId: 'welcome' },
+		{ label: 'Subscription recorded in Stripe', how: 'manual', manualId: 'stripe' },
+		{ label: 'Hostinger nightly backup covers this site', how: 'manual', manualId: 'backups' },
+		{ label: 'Added to uptime monitoring', how: 'manual', manualId: 'monitor' },
+	],
+};
+for (const s of STAGES) s.steps = STEPS[s.key] || [];

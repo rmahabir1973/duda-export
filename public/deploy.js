@@ -67,6 +67,7 @@ function render() {
 		</div>
 		<p class="err" id="dErr"></p>
 		<p class="hint">Preview address: <b>${esc(c.slug)}.${esc(CFG.previewDomain)}</b></p>
+		${(() => { const m = Object.entries(CFG.configured).filter(([, v]) => !v).map(([k]) => NEEDS[k] || k); return m.length ? `<p class="need">Not set up on this server yet: ${m.map(esc).join(', ')}. Steps that need these show a hand-done instruction instead.</p>` : '<p class="hint">All services are set up.</p>'; })()}
 	</section>
 	${CFG.stages.map((s) => stageHtml(s)).join('')}
 	<section class="card"><h2>Activity</h2><div class="lg">${(c.log || []).slice().reverse().slice(0, 40).map((l) => `<div>${new Date(l.at).toLocaleString()} — ${esc(l.text)}</div>`).join('') || 'Nothing yet.'}</div>
@@ -85,16 +86,40 @@ function render() {
 
 async function gw(off) { try { await api('/churches/' + cur.id + '/gateway', { method: 'POST', body: JSON.stringify({ off }) }); alert(off ? 'Switched off.' : 'Switched on.'); cur = await api('/churches/' + cur.id); render(); } catch (e) { alert(e.message); } }
 
+const NEEDS = { gateway: 'the AI gateway key', cloudflare: 'Cloudflare', previewDns: 'Cloudflare preview zone + Hostinger IP', postmark: 'Postmark account token', smtp: 'Postmark server token', ssh: 'Hostinger SSH', smartermail: 'SmarterMail' };
+const RANK = { error: 0, fail: 1, warn: 2, manual: 3, info: 4, planned: 5, done: 6, pass: 7 };
+const WORD = { pass: 'OK', done: 'Done', fail: 'Problem', error: 'Error', warn: 'Check', manual: 'Do by hand', info: 'Note', planned: 'Will do' };
+const worst = (items) => items.reduce((w, i) => (RANK[i.status] < RANK[w] ? i.status : w), 'pass');
+
+function stepHtml(s, st, i, last, used) {
+	const c = cur, state = c.stageStates[s.key];
+	const missing = (st.needs || []).filter((n) => !CFG.configured[n]);
+	const items = last ? last.items.filter((it) => (st.ids || []).includes(it.id)) : [];
+	items.forEach((it) => used.add(it));
+	const label = (st.manualId && (c.manualLabels?.[s.key] || []).find((m) => m.id === st.manualId)?.label) || st.label;
+	const how = st.how === 'auto' ? (missing.length ? 'By hand until set up' : 'Automatic') : st.how === 'manual' ? 'By hand' : 'Check';
+	const cls = st.how === 'auto' ? (missing.length ? 'hand' : 'auto') : st.how === 'manual' ? 'hand' : 'chk';
+	const box = st.manualId ? `<input type="checkbox" data-key="${s.key}" data-chk="${esc(st.manualId)}"${state.manual[st.manualId] ? ' checked' : ''}>` : `<span class="sn">${i + 1}</span>`;
+	const res = items.length ? `<span class="rs ${worst(items)}">${WORD[worst(items)]}</span>` : '';
+	return `<li class="step"><div class="sh">${box}<span class="sl">${esc(label)}</span><span class="tag ${cls}">${how}</span>${res}</div>
+	${missing.length ? `<div class="need">Not set up on this server: ${missing.map((n) => esc(NEEDS[n] || n)).join(', ')}. The exact command or action is shown when you press Run.</div>` : ''}
+	${st.note ? `<div class="hint">${esc(st.note)}</div>` : ''}
+	${items.length ? `<ul class="res sub">${items.map(itemHtml).join('')}</ul>` : ''}</li>`;
+}
+
 function stageHtml(s) {
 	const c = cur, state = c.stageStates[s.key], skip = s.onlyPlan && s.onlyPlan !== c.plan;
 	const blocked = state.blockedBy.filter((x) => x !== 'plan');
 	const open = openKey === s.key;
-	const labels = (c.manualLabels?.[s.key] || []);
-	const last = state.last;
+	const last = state.last, used = new Set();
+	const auto = s.steps.filter((x) => x.how === 'auto').length, hand = s.steps.filter((x) => x.how === 'manual').length;
+	const notReady = [...new Set(s.steps.flatMap((x) => (x.needs || []).filter((n) => !CFG.configured[n])))];
+	const steps = open ? s.steps.map((st, i) => stepHtml(s, st, i, last, used)).join('') : '';
+	const extra = open && last ? last.items.filter((it) => !used.has(it)) : [];
 	return `<div class="stage ${state.done ? 'done' : blocked.length || skip ? 'blocked' : ''}">
-	<div class="hd" data-open="${s.key}"><span class="num">${state.done ? '✓' : s.n}</span><span class="tt">${esc(s.title)}${skip ? ' <span class="hint">(not needed: Website plan)</span>' : ''}</span><span class="hint">${state.done ? 'Done' : blocked.length ? 'Waiting for earlier stage' : ''}</span></div>
+	<div class="hd" data-open="${s.key}"><span class="num">${state.done ? '✓' : s.n}</span><span class="tt">${esc(s.title)}${skip ? ' <span class="hint">(not needed: Website plan)</span>' : ''}</span><span class="hint">${state.done ? 'Done' : blocked.length ? 'Waiting for earlier stage' : `${auto} automatic · ${hand} by hand`}</span></div>
 	${open ? `<div class="bd"><p class="hint">${esc(s.blurb.replace('{slug}', c.slug))}</p>
-	${labels.length ? labels.map((m) => `<label class="chk"><input type="checkbox" data-key="${s.key}" data-chk="${esc(m.id)}"${state.manual[m.id] ? ' checked' : ''}> <span>${esc(m.label)}</span></label>`).join('') : ''}
+	${notReady.length ? `<p class="need">Missing setup for this stage: ${notReady.map((n) => esc(NEEDS[n] || n)).join(', ')}. Those steps become hand-done instructions.</p>` : ''}
 	${blocked.length ? `<p class="err">Finish first: ${blocked.map((b) => esc(CFG.stages.find((x) => x.key === b).title)).join(', ')}</p>` : ''}
 	<div class="btns">
 		<button class="primary" data-key="${s.key}" data-act="check">Check</button>
@@ -102,7 +127,9 @@ function stageHtml(s) {
 		${s.key === 'mailboxes' ? `<button class="sm" data-key="${s.key}" data-act="run" data-cutover="1"${blocked.length || skip ? ' disabled' : ''}>Switch MX to our server</button>` : ''}
 		${s.key === 'sending' ? `<button class="sm" data-key="${s.key}" data-act="run" data-testmail="1"${blocked.length ? ' disabled' : ''}>Run + send a test email</button>` : ''}
 	</div>
-	<div id="out-${s.key}">${last ? `<div class="hint">Last ${esc(last.action)}: ${new Date(last.at).toLocaleString()} — ${last.ok ? 'no problems' : 'needs attention'}</div><ul class="res">${last.items.map(itemHtml).join('')}</ul>` : ''}${lastSecret && lastSecret.key === s.key ? `<div class="secret">${esc(lastSecret.text)}</div><p class="hint">Copy these now. They are not saved anywhere.</p>` : ''}</div></div>` : ''}
+	<div id="out-${s.key}">${last ? `<div class="hint">Last ${esc(last.action)}: ${new Date(last.at).toLocaleString()} — ${last.ok ? 'no problems' : 'needs attention'}</div>` : '<div class="hint">Not run yet. Press Check to see where this stage stands.</div>'}${lastSecret && lastSecret.key === s.key ? `<div class="secret">${esc(lastSecret.text)}</div><p class="hint">Copy these now. They are not saved anywhere.</p>` : ''}</div>
+	<ol class="steps">${steps}</ol>
+	${extra.length ? `<div class="hint">Other results</div><ul class="res">${extra.map(itemHtml).join('')}</ul>` : ''}</div>` : ''}
 	</div>`;
 }
 

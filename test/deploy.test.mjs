@@ -141,3 +141,19 @@ test('router: create, gate, run, secrets not stored', async () => {
 		assert.ok(!saved.includes('SECRETTOKEN'));
 	} finally { srv.close(); }
 });
+
+import { errText, configFromEnv, configured } from '../deploy/clients.mjs';
+test('error text is always a readable string', () => {
+	assert.equal(errText({ data: { type: 'error', error: { type: 'not_found_error', message: 'Not found' } }, status: 404 }), 'Not found');
+	assert.equal(errText({ data: { error: 'Invalid admin key.' }, status: 401 }), 'Invalid admin key.');
+	assert.equal(errText({ data: { errors: [{ message: 'Authentication error' }] }, status: 403 }, 'fix it'), 'Authentication error (fix it)');
+	assert.equal(errText({ data: null, status: 0, error: 'timed out' }), 'timed out');
+	assert.ok(!errText({ data: { error: { x: 1 } }, status: 500 }).includes('[object'));
+});
+test('Hostinger variable names are understood for SSH', () => {
+	const cfg = configFromEnv({ HOSTINGER_IP: '1.2.3.4', HOSTINGER_USERNAME: 'u123', HOSTINGER_PORT: '65002', SSH_PRIVATE_KEY: 'k' });
+	assert.deepEqual([cfg.sshHost, cfg.sshUser, cfg.sshPort], ['1.2.3.4', 'u123', 65002]);
+	assert.equal(configured(cfg).ssh, true);
+	assert.equal(configured(configFromEnv({ HOSTINGER_IP: '1.2.3.4', HOSTINGER_USERNAME: 'u' })).ssh, false);
+});
+test('every stage has a step breakdown', () => { for (const s of STAGES) assert.ok(s.steps.length >= 4, s.key); });
