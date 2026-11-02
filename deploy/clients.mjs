@@ -2,6 +2,8 @@
 // so the steps can be tested with fakes. Nothing here prints or stores a secret.
 import dns from 'node:dns/promises';
 import tls from 'node:tls';
+import net from 'node:net';
+import { makeSmarterMail } from './smartermail.mjs';
 import crypto from 'node:crypto';
 
 /** Quote one value for a POSIX shell, so a church name can never become a command. */
@@ -51,7 +53,9 @@ export function configFromEnv(env = process.env) {
 		sshKey: (env.SSH_PRIVATE_KEY || '').replace(/\\n/g, '\n'), sshPassphrase: env.SSH_PASSPHRASE || '',
 		siteRoot: env.SITE_ROOT || '$HOME/domains/{host}/public_html',
 		wpCli: env.WP_CLI || 'wp',
-		smartermailReady: env.SMARTERMAIL_API_READY === '1',
+		smartermailUrl: (() => { const u = clean(env.SMARTERMAIL_URL); return u ? (/^https?:\/\//i.test(u) ? u : 'https://' + u).replace(/\/$/, '') : ''; })(),
+		smartermailUser: clean(env.SMARTERMAIL_ADMIN_USER), smartermailPassword: String(env.SMARTERMAIL_ADMIN_PASSWORD || '').trim(),
+		smartermailDomainPath: env.SMARTERMAIL_DOMAIN_PATH || 'C:\\SmarterMail\\Domains\\{domain}', smartermailDomainAdmin: env.SMARTERMAIL_DOMAIN_ADMIN || 'postmaster',
 	};
 }
 
@@ -62,7 +66,7 @@ export const configured = (cfg) => ({
 	postmark: !!cfg.postmarkAccountToken,
 	smtp: !!cfg.postmarkServerToken,
 	ssh: !!(cfg.sshHost && cfg.sshUser && (cfg.sshKey || cfg.sshPassword)),
-	smartermail: cfg.smartermailReady,
+	smartermail: !!(cfg.smartermailUrl && cfg.smartermailUser && cfg.smartermailPassword),
 	hostingerIp: !!cfg.hostingerIp,
 });
 
@@ -161,6 +165,12 @@ export function makeClients(cfg, deps = {}) {
 		async verifyDkim(id) { return pmCall('PUT', `/domains/${id}/verifydkim`); },
 		async verifyReturnPath(id) { return pmCall('PUT', `/domains/${id}/verifyreturnpath`); },
 		async verifySpf(id) { return pmCall('PUT', `/domains/${id}/verifyspf`); },
+		/** Send one message with the Server token (the From address must be on a verified Postmark domain). */
+		async sendEmail(msg) {
+			const r = await req(f, cfg.postmarkBase + '/email', { method: 'POST', headers: { 'x-postmark-server-token': cfg.postmarkServerToken }, body: msg });
+			if (!r.ok) throw new Error('Postmark: ' + errText(r));
+			return r.data;
+		},
 	};
 
 	// DNS lookups go to public resolvers, not the container's cache.
@@ -168,7 +178,7 @@ export function makeClients(cfg, deps = {}) {
 	const soft = async (p) => { try { return await p; } catch (e) { if (['ENODATA', 'ENOTFOUND', 'ENOENT', 'NXDOMAIN'].includes(e.code)) return []; throw e; } };
 	const dnsClient = deps.dns || {
 		ns: (d) => soft(resolver.resolveNs(d)), a: (d) => soft(resolver.resolve4(d)), aaaa: (d) => soft(resolver.resolve6(d)),
-		cname: (d) => soft(resolver.resolveCname(d)), mx: (d) => soft(resolver.resolveMx(d)), txt: (d) => soft(resolver.resolveTxt(d)),
+		cname: (d) => soft(resolver.resolveCname(d)), mx: (d) => soft(resolver.resolveMx(d)), txt: (d) => soft(resolver.resolveTxt(d)), ptr: (ip) => soft(resolver.reverse(ip)),
 	};
 
 	const http = deps.http || {
@@ -208,5 +218,14 @@ export function makeClients(cfg, deps = {}) {
 		},
 	};
 
-	return { cfg, gateway, cloudflare, postmark, dns: dnsClient, http, tls: tlsInfo, ssh };
+	/** Can we open a TCP connection to host:port? (Used by the email health check.) */
+	const probe = deps.probe || ((host, port) => new Promise((resolve) => {
+		const s = net.connect({ host, port, timeout: 6000 });
+		s.on('connect', () => { s.destroy(); resolve({ open: true }); });
+		s.on('timeout', () => { s.destroy(); resolve({ open: false, error: 'timed out' }); });
+		s.on('error', (e) => resolve({ open: false, error: e.code || e.message }));
+	}));
+
+	const smartermail = makeSmarterMail(cfg, { fetch: f });
+	return { cfg, gateway, cloudflare, postmark, dns: dnsClient, http, tls: tlsInfo, ssh, probe, smartermail };
 }

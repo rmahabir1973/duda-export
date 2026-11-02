@@ -7,7 +7,7 @@ RUN npm ci --omit=dev \
  && rm -rf /var/lib/apt/lists/* \
  && chmod -R a+rX /ms-playwright
 COPY . .
-RUN useradd -m -u 10001 app && chown -R app /app
-USER app
+RUN useradd -m -u 10001 app && chown -R app /app && chmod +x /app/docker-entrypoint.sh
+# Starts as root only to fix the volume's ownership, then runs the app as the unprivileged "app" user.
 EXPOSE 3000
-CMD ["node", "server.mjs"]
+CMD ["/app/docker-entrypoint.sh"]

@@ -76,3 +76,5 @@ li.req { display: flex; gap: 12px; align-items: flex-start; padding: 12px 0; bor
 .ra { flex: none; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; } .primary.sm2 { margin: 0; padding: 7px 12px; font-size: 13.5px; }
 label.tick { display: flex; gap: 6px; align-items: center; font-weight: 600; margin: 0; cursor: pointer; }
 @media (max-width: 700px) { li.req { flex-wrap: wrap; } .ra { flex-direction: row; width: 100%; padding-left: 38px; } }
+textarea { width: 100%; padding: 9px 11px; border: 1px solid #cfd4da; border-radius: 7px; font: inherit; }
+.ok .ic, .no .ic { } .res li.ok .ic { color: #17692e; } .res li.no .ic, .res li.error .ic { color: #8a1f1f; } .res li.warn .ic { color: #7a5a00; } .res li.info .ic, .res li.blocked .ic { color: #335; }

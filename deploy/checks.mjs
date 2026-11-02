@@ -364,7 +364,7 @@ export const STAGES = [
 		blurb: 'Only for the Website + Email plan. Create the mailboxes first, move any old mail, and only then switch the email to our server.',
 		reqs: [
 			{
-				...manual('boxes', 'Are the mailboxes created on our mail server?', 'Add the domain and these mailboxes in SmarterMail, with "must change password at next login". Then tick this box.'),
+				...manual('boxes', 'Are the mailboxes created on our mail server?', 'Use the Email setup page (top of the screen): enter the domain, the addresses and a default password, then press "Create domain and mailboxes". Then tick this box.'),
 				fixLabel: 'Generate temporary passwords',
 				async fix(ctx, ch) {
 					const names = (ch.mailboxes || []).length ? ch.mailboxes : ['info'];

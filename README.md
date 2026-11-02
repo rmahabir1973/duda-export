@@ -115,6 +115,16 @@ Open **Deploy a church** (top right of the Exporter). Add a church (name, option
 | 7 | Sending email (Postmark) | Domain in Postmark? Records in Cloudflare? One SPF + DMARC? Verified? Website sending through Postmark? |
 | 8 | Hand over | Church login? Staff view on? AI Assistant switched on? Welcome email, Stripe, backups, monitoring |
 
+## Email setup page
+
+Open **Email setup** (top of the screen). Four steps, in this order:
+1. **Create the church's email**: enter the domain, the addresses (just the part before the @) and one default password. It adds the domain on our SmarterMail server and creates each mailbox. *Preview* shows exactly what it will do first. Passwords are never saved or shown again.
+2. **Send outgoing email through Postmark**: adds the domain at Postmark, puts DKIM, Return-Path, one merged SPF and DMARC in Cloudflare, and asks Postmark to verify. The domain must already be in our Cloudflare (Deploy page, stage 4).
+3. **Check that everything is set up**: an MX-toolbox-style read-only check (MX, mail server address, reverse DNS, ports 587/993, certificate, SPF, DKIM, DMARC, autodiscover).
+4. **Send a test email** through Postmark.
+
+SmarterMail variables: `SMARTERMAIL_URL`, `SMARTERMAIL_ADMIN_USER`, `SMARTERMAIL_ADMIN_PASSWORD`. Optional: `SMARTERMAIL_DOMAIN_PATH` (default `C:\SmarterMail\Domains\{domain}`: check it against an existing domain) and `SMARTERMAIL_DOMAIN_ADMIN` (default `postmaster`). Not yet tested against the live mail server.
+
 ### Environment variables (set as Railway variables, never in chat)
 
 `GATEWAY_ADMIN_KEY`, `GATEWAY_URL`, `DEFAULT_DAILY_TOKENS`, `DEFAULT_DAILY_IMAGES` · `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_PREVIEW_ZONE_ID`, `PREVIEW_DOMAIN`, `HOSTINGER_IP`, `TEMPLATE_SLUG` · `POSTMARK_ACCOUNT_TOKEN`, `POSTMARK_SERVER_TOKEN` · `SSH_HOST`, `SSH_PORT`, `SSH_USER`, `SSH_PRIVATE_KEY` (use `\n` for line breaks), `SSH_PASSPHRASE`, `SITE_ROOT` (default `$HOME/domains/{host}/public_html`), `WP_CLI` · `DUDA_IPS`, `DUDA_HOSTS`, `OUR_MX_HOSTS`, `MAIL_HOST`, `DMARC_RUA`, `DNS_SERVERS` · `SMARTERMAIL_API_READY`.

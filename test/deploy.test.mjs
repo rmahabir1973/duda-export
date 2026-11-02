@@ -254,3 +254,100 @@ test('error text is readable; Hostinger variable names are understood; pasted to
 test('every stage has plain-language questions only', () => {
 	for (const s of STAGES) for (const q of s.reqs) assert.ok(q.label.length > 10 && /[?]$/.test(q.label), `${s.key}.${q.id}`);
 });
+
+// ---------------------------------------------------------------- email setup
+import { makeSmarterMail } from '../deploy/smartermail.mjs';
+import { parseInput, createMailboxes, enablePostmark, healthCheck, sendTest } from '../deploy/email.mjs';
+
+const PW = 'Sunday-Best-2026!';
+/** A pretend SmarterMail server that records every request. */
+function fakeMail({ domainExists = false, sysCanAddUsers = true, domainPathError = false } = {}) {
+	const calls = [];
+	const fetch = async (url, o) => {
+		const path = new URL(url).pathname, body = o.body ? JSON.parse(o.body) : null, auth = (o.headers || {}).authorization || '';
+		calls.push({ path, body, auth });
+		const reply = (status, data) => ({ ok: status < 400, status, text: async () => JSON.stringify(data) });
+		if (path === '/api/v1/auth/authenticate-user') return body.password === PW || body.username === 'admin' ? reply(200, { accessToken: 'tok-' + body.username, refreshToken: 'r' }) : reply(401, { message: 'bad' });
+		if (path === '/api/v1/settings/sysadmin/domain-put') return domainPathError ? reply(400, { success: false, message: 'The path is not valid' }) : domainExists ? reply(200, { success: false, message: 'Domain already exists' }) : reply(200, { success: true });
+		if (path === '/api/v1/settings/domain/user-put') return auth === 'Bearer tok-admin' && !sysCanAddUsers ? reply(401, { message: 'domain admins only' }) : body.userData.userName === 'dup' ? reply(400, { success: false, message: 'User already exists' }) : reply(200, { success: true });
+		return reply(404, {});
+	};
+	return { calls, fetch };
+}
+const smCtx = (m, over = {}) => {
+	const cfg = { ...baseCfg, smartermailUrl: 'https://mail.churchwebglobal.com', smartermailUser: 'admin', smartermailPassword: 'sysadmin-secret', smartermailDomainPath: 'C:\\SmarterMail\\Domains\\{domain}', smartermailDomainAdmin: 'postmaster', ...over };
+	return { c: { cfg, smartermail: makeSmarterMail(cfg, { fetch: m.fetch }) }, configured: {}, memo: {} };
+};
+
+test('email form: validation says what is wrong in plain words', () => {
+	assert.throws(() => parseInput({ domain: 'nope', addresses: 'a', password: PW }), /domain/);
+	assert.throws(() => parseInput({ domain: 'grace.org', addresses: '', password: PW }), /at least one/);
+	assert.throws(() => parseInput({ domain: 'grace.org', addresses: 'office', password: 'short' }), /12 characters/);
+	assert.throws(() => parseInput({ domain: 'grace.org', addresses: 'office', password: 'alllowercase1234' }), /capital/);
+	assert.throws(() => parseInput({ domain: 'grace.org', addresses: 'a@other.org', password: PW }), /isn't on grace\.org/);
+	assert.throws(() => parseInput({ domain: 'grace.org', addresses: 'bad name!', password: PW }), /valid mailbox/);
+	const ok = parseInput({ domain: 'https://www.Grace.org/', addresses: 'Office, pastor@grace.org\noffice', password: PW });
+	assert.deepEqual([ok.domain, ok.names], ['grace.org', ['office', 'pastor']]);
+});
+
+test('create: logs in, adds the domain with the documented body, then each mailbox; no password in the output', async () => {
+	const m = fakeMail(), ctx = smCtx(m);
+	const items = await createMailboxes(ctx, parseInput({ domain: 'grace.org', addresses: 'office, pastor', password: PW }));
+	assert.deepEqual(m.calls.map((c) => c.path), ['/api/v1/auth/authenticate-user', '/api/v1/settings/sysadmin/domain-put', '/api/v1/settings/domain/user-put', '/api/v1/settings/domain/user-put']);
+	const dom = m.calls[1].body;
+	assert.equal(dom.domainData.name, 'grace.org'); assert.equal(dom.domainData.path, 'C:\\SmarterMail\\Domains\\grace.org'); assert.equal(dom.domainData.hostname, 'mail.churchwebglobal.com');
+	assert.equal(dom.domainLocation, 'Local'); assert.equal(dom.adminUsername, 'postmaster'); assert.equal(dom.adminPassword, PW);
+	assert.equal(m.calls[1].auth, 'Bearer tok-admin');
+	assert.deepEqual(m.calls[2].body.userData, { userName: 'office', password: PW, fullName: 'office', domain: 'grace.org' });
+	assert.ok(items.every((i) => i.state === 'ok'), JSON.stringify(items));
+	assert.ok(!JSON.stringify(items).includes(PW) && !JSON.stringify(items).includes('sysadmin-secret'));
+});
+
+test('create: preview changes nothing; an existing domain and an existing mailbox are not errors', async () => {
+	let m = fakeMail(); let items = await createMailboxes(smCtx(m), parseInput({ domain: 'grace.org', addresses: 'office', password: PW }), { dry: true });
+	assert.equal(m.calls.length, 0); assert.match(items[0].detail, /C:\\SmarterMail\\Domains\\grace\.org/);
+	m = fakeMail({ domainExists: true }); items = await createMailboxes(smCtx(m), parseInput({ domain: 'grace.org', addresses: 'dup, new', password: PW }));
+	assert.deepEqual(items.map((i) => i.state), ['ok', 'ok', 'ok']); assert.match(items[0].label, /already exists/); assert.match(items[1].detail, /Already existed/);
+});
+
+test('create: falls back to the domain administrator when the system admin cannot add users', async () => {
+	const m = fakeMail({ sysCanAddUsers: false }), items = await createMailboxes(smCtx(m), parseInput({ domain: 'grace.org', addresses: 'office', password: PW }));
+	assert.ok(items.every((i) => i.state === 'ok'), JSON.stringify(items));
+	assert.ok(m.calls.some((c) => c.path.endsWith('authenticate-user') && c.body.username === 'postmaster@grace.org'));
+});
+
+test('create: a bad folder path gives a plain hint, and a wrong login says so', async () => {
+	let items = await createMailboxes(smCtx(fakeMail({ domainPathError: true })), parseInput({ domain: 'grace.org', addresses: 'office', password: PW }));
+	assert.equal(items.length, 1); assert.match(items[0].detail, /SMARTERMAIL_DOMAIN_PATH/);
+	const m = fakeMail(); const ctx = smCtx(m); ctx.c.smartermail = makeSmarterMail({ ...ctx.c.cfg, smartermailUser: 'someone' }, { fetch: m.fetch });
+	items = await createMailboxes(ctx, parseInput({ domain: 'grace.org', addresses: 'office', password: PW }));
+	assert.equal(items[0].state, 'error'); assert.match(items[0].label, /sign in/);
+});
+
+test('health check: reports good and bad mail DNS like an MX toolbox', async () => {
+	const dnsData = { mx: [{ exchange: 'mail.churchwebglobal.com', priority: 10 }], a: { 'mail.churchwebglobal.com': ['5.6.7.8'] }, txt: { 'grace.org': [['v=spf1 include:spf.mtasv.net a:mail.churchwebglobal.com ~all']], '_dmarc.grace.org': [] }, ptr: ['mail.churchwebglobal.com'] };
+	const c = { cfg: baseCfg, dns: { mx: async () => dnsData.mx, a: async (n) => dnsData.a[n] || [], cname: async () => [], txt: async (n) => dnsData.txt[n] || [], ptr: async () => dnsData.ptr }, tls: async () => ({ authorized: true, validTo: 'Jan 1 2027' }), probe: async (h, p) => ({ open: p === 587 }), postmark: { available: () => true, domainByName: async () => ({ ID: 7 }), domain: async () => ({ DKIMVerified: true, ReturnPathDomainVerified: false }) } };
+	const st = Object.fromEntries((await healthCheck({ c }, 'grace.org')).map((i) => [i.id, i.state]));
+	assert.deepEqual([st.mx, st.mxhost, st.ptr, st.p587, st.p993, st.cert, st.spf, st.dmarc, st.dkim, st.rp], ['ok', 'ok', 'ok', 'ok', 'warn', 'ok', 'ok', 'warn', 'ok', 'no']);
+	dnsData.mx = []; dnsData.txt['grace.org'] = [['v=spf1 a ~all'], ['v=spf1 mx ~all']];
+	const bad = Object.fromEntries((await healthCheck({ c }, 'grace.org')).map((i) => [i.id, i.state]));
+	assert.deepEqual([bad.mx, bad.spf], ['no', 'no']);
+});
+
+test('test email goes through Postmark from an address on the church domain', async () => {
+	let sent; const ctx = { c: { cfg: baseCfg, postmark: { sendEmail: async (m) => ((sent = m), { MessageID: 'abc' }) } } };
+	const r = await sendTest(ctx, 'grace.org', 'me@example.com');
+	assert.equal(sent.From, 'test@grace.org'); assert.equal(sent.To, 'me@example.com'); assert.match(r[0].detail, /abc/);
+	await assert.rejects(() => sendTest(ctx, 'grace.org', 'nope'), /address/);
+});
+
+test('enable Postmark: sets up the domain, DNS records and one SPF using the same checks as stage 7', async () => {
+	const f = fakes(); await f.c.cloudflare.createZone('grace.org');
+	const ctx = { c: f.c, configured: configured(f.c.cfg), memo: {} };
+	const dry = await enablePostmark(ctx, 'grace.org', { dry: true });
+	assert.equal(f.calls.pm.length, 0); assert.ok(dry.some((i) => /Would/.test(i.detail)));
+	const items = await enablePostmark(ctx, 'grace.org');
+	assert.deepEqual(items.map((i) => i.state), ['ok', 'ok', 'ok', 'ok']);
+	assert.ok(f.calls.pm.some((c) => c[0] === 'create' && c[1] === 'grace.org'));
+	assert.equal(f.recs.get('z-grace.org').filter((x) => /v=spf1/.test(x.content)).length, 1);
+});

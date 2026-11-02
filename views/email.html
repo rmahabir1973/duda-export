@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Email setup · ChurchWeb Global</title><meta name="robots" content="noindex,nofollow"><link rel="stylesheet" href="/assets/style.css"></head>
+<body>
+<header><h1>Email setup <small>ChurchWeb Global</small></h1><a class="navlink" href="/deploy">Deploy a church</a><a class="navlink" href="/">Exporter</a><button id="logout">Sign out</button></header>
+<main>
+  <section class="card">
+    <h2>1. Create the church's email</h2>
+    <div class="row3" style="grid-template-columns:1fr 1fr">
+      <div><label for="domain">Church domain</label><input id="domain" type="text" placeholder="britanniaunited.ca" autocomplete="off"></div>
+      <div><label for="pw">Default password for the new mailboxes</label><input id="pw" type="password" autocomplete="new-password" placeholder="12+ characters: Aa1!"><p class="hint">Shown to no one and not saved. Tell each person to change it at first login.</p></div>
+    </div>
+    <label for="boxes">Email addresses to create (one per line, or separated by commas)</label>
+    <textarea id="boxes" rows="4" placeholder="office&#10;pastor&#10;treasurer"></textarea>
+    <p class="hint">Type just the part before the @. The domain is added if it isn't on the mail server yet.</p>
+    <div class="btns"><button class="sm" id="bPrev">Preview</button><button class="primary" id="bCreate">Create domain and mailboxes</button></div>
+    <ul class="res" id="rCreate"></ul>
+  </section>
+  <section class="card">
+    <h2>2. Send outgoing email through Postmark</h2>
+    <p class="hint">Adds the domain to Postmark, puts its DKIM, Return-Path, SPF and DMARC records in Cloudflare, and asks Postmark to verify. The domain must already be in our Cloudflare (stage 4 on the Deploy page).</p>
+    <div class="btns"><button class="sm" id="pPrev">Preview</button><button class="primary" id="pRun">Enable Postmark</button></div>
+    <ul class="res" id="rPm"></ul>
+  </section>
+  <section class="card">
+    <h2>3. Check that everything is set up</h2>
+    <p class="hint">Like an MX toolbox: mail delivery records, the mail server, SPF, DKIM, DMARC, reverse DNS and certificates. Read-only.</p>
+    <div class="btns"><button class="primary" id="hRun">Run the check</button></div>
+    <ul class="res" id="rHealth"></ul>
+  </section>
+  <section class="card">
+    <h2>4. Send a test email</h2>
+    <div class="row3" style="grid-template-columns:2fr auto"><div><label for="to">Send a test message to</label><input id="to" type="text" placeholder="you@example.com" autocomplete="off"></div><div><button class="primary" id="tRun">Send test</button></div></div>
+    <ul class="res" id="rTest"></ul>
+  </section>
+  <p class="err" id="err"></p>
+</main>
+<script src="/assets/email.js"></script>
+</body></html>
