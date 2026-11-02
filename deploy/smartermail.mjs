@@ -37,6 +37,16 @@ export function makeSmarterMail(cfg, { fetch: f = globalThis.fetch } = {}) {
 			if (/exist|already|duplicate/i.test(msg(r))) return { ok: true, exists: true };
 			return { ok: false, error: msg(r), status: r.status };
 		},
+		/** Sets an existing user's password. The caller must check it worked (sign in with the new password): SmarterMail versions differ in what they accept. */
+		async setPassword(token, { domain, userName, password }) {
+			let last = '';
+			for (const userData of [{ userName, password, domain }, { userName: `${userName}@${domain}`, password, domain }]) {
+				const r = await call('api/v1/settings/domain/user-put', { token, body: { userData } });
+				if (r.ok && r.data?.success !== false) return { ok: true };
+				last = msg(r);
+			}
+			return { ok: false, error: last };
+		},
 		async addUser(token, { domain, userName, password, fullName }) {
 			const body = { userData: { userName, password, fullName: fullName || userName, domain } };
 			const r = await call('api/v1/settings/domain/user-put', { token, body });

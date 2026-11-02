@@ -23,6 +23,14 @@
     <div><button class="sm" id="clear" type="button">Clear filters</button></div>
   </div>
   <div class="banner" id="banner"></div>
+  <details class="card manage" id="outreach"><summary>Email these churches</summary>
+    <p class="hint">Sends the intro email through Loops to the churches matching the filters above. Customers, people who unsubscribed or bounced, and anyone emailed in the last 60 days are always left out. Each email address is used once.</p>
+    <p class="need" id="oWarn" hidden></p>
+    <div class="row3" style="grid-template-columns:2fr 1fr auto;align-items:end"><div><label for="oCamp">Campaign name</label><input id="oCamp" type="text" maxlength="40" placeholder="intro-2026-11"></div><div></div><div><button class="primary" id="oPrev" type="button">Preview who would get it</button></div></div>
+    <div id="oRes" class="hint" style="margin-top:10px"></div>
+    <div id="oConfirm" hidden><label for="oType">To confirm, type the number of emails that will be sent</label><input id="oType" type="text" inputmode="numeric" style="max-width:140px"> <button class="primary" id="oSend" type="button">Send now</button></div>
+    <p id="oStats" class="hint"></p><p class="err" id="oErr"></p>
+  </details>
   <div class="dirmeta"><span id="shown"></span><span class="hint">Duplicate pastoral-charge listings are excluded; charges with no church listing are kept.</span></div>
   <div class="tablewrap"><table class="dirtable"><thead><tr><th>Name</th><th>Type</th><th>City</th><th>Prov.</th><th>Address</th><th>Postal code</th><th>Phone</th><th>Email</th><th>Website</th><th>Customer</th><th>Outreach</th></tr></thead><tbody id="rows"></tbody></table></div>
   <div class="pager"><button class="sm" id="prev">← Previous</button><span id="page"></span><button class="sm" id="next">Next →</button></div>

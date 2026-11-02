@@ -9,13 +9,16 @@ const api = async (path, opts = {}) => {
 };
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const PLAN = { website: 'Website', email: 'Website + Email' };
+const KIND = { new: 'New site', migration: 'DUDA migration' };
 const ICON = { ok: '✔', no: '✖', warn: '!', info: 'i', unknown: '?', blocked: '…', error: '!' };
 const SERVICE = { gateway: 'the AI gateway key', cloudflare: 'Cloudflare', previewDns: 'Cloudflare preview zone + Hostinger IP', postmark: 'Postmark account token', smtp: 'Postmark server token', ssh: 'Hostinger SSH', smartermail: 'SmarterMail', hostingerIp: 'Hostinger IP address', hostingerApi: 'Hostinger API key' };
 const SAT = new Set(['ok', 'info', 'warn']);
 // The board and the project tabs group the stages into phases a person thinks in.
 const PHASES = [
+	{ id: 'sales', title: 'Prospect', stages: ['sales'] },
 	{ id: 'domain', title: 'Domain setup', stages: ['dnscheck', 'cloudflare'] },
 	{ id: 'preview', title: 'Preview site', stages: ['preview'] },
+	{ id: 'migrate', title: 'Move from DUDA', stages: ['migrate'] },
 	{ id: 'approval', title: 'Review & approval', stages: ['approval'] },
 	{ id: 'switch', title: 'Switch domain', stages: ['dns'] },
 	{ id: 'live', title: 'Go live', stages: ['golive'] },
@@ -33,7 +36,7 @@ async function loadBoard() {
 	const cols = [...PHASES.map((p) => ({ id: p.id, title: p.title, cards: [] })), { id: 'done', title: 'Done', cards: [] }];
 	for (const c of list) (cols.find((x) => x.id === (c.stage ? phaseOf(c.stage).id : 'done')) || cols[0]).cards.push(c);
 	$('board').innerHTML = cols.map((col) => `<div class="col"><div class="colh">${esc(col.title)} <span class="cnt">${col.cards.length}</span></div>
-		${col.cards.map((c) => { const t = Object.values(c.counts).reduce((a, x) => a + x.total, 0), d = Object.values(c.counts).reduce((a, x) => a + x.done, 0); return `<div class="pcard" data-id="${esc(c.id)}"><b>${esc(c.name)}</b><div class="hint">${esc(c.domain || 'no domain yet')} · ${PLAN[c.plan]}</div><div class="bar"><i style="width:${t ? Math.round((d / t) * 100) : 0}%"></i></div><div class="hint">${d} of ${t} tasks${c.next ? ' · Next: ' + esc(c.next) : ''}</div></div>`; }).join('') || '<div class="hint empty">—</div>'}</div>`).join('');
+		${col.cards.map((c) => { const t = Object.values(c.counts).reduce((a, x) => a + x.total, 0), d = Object.values(c.counts).reduce((a, x) => a + x.done, 0); return `<div class="pcard" data-id="${esc(c.id)}"><b>${esc(c.name)}</b><div class="hint">${esc(c.domain || 'no domain yet')} · ${PLAN[c.plan]}</div><span class="kind ${esc(c.kind)}">${esc(KIND[c.kind] || '')}</span><div class="bar"><i style="width:${t ? Math.round((d / t) * 100) : 0}%"></i></div><div class="hint">${d} of ${t} tasks${c.next ? ' · Next: ' + esc(c.next) : ''}</div></div>`; }).join('') || '<div class="hint empty">—</div>'}</div>`).join('');
 	for (const el of document.querySelectorAll('.pcard')) el.onclick = () => openChurch(el.dataset.id);
 }
 async function init() {
@@ -43,7 +46,7 @@ async function init() {
 }
 $('newForm').onsubmit = async (e) => {
 	e.preventDefault(); $('nErr').textContent = '';
-	try { const c = await api('/churches', { method: 'POST', body: JSON.stringify({ name: $('nName').value, domain: $('nDomain').value, plan: $('nPlan').value }) }); $('nName').value = ''; $('nDomain').value = ''; await loadBoard(); openChurch(c.id); }
+	try { const c = await api('/churches', { method: 'POST', body: JSON.stringify({ name: $('nName').value, domain: $('nDomain').value, plan: $('nPlan').value, kind: $('nKind').value }) }); $('nName').value = ''; $('nDomain').value = ''; await loadBoard(); openChurch(c.id); }
 	catch (er) { $('nErr').textContent = er.message; }
 };
 $('hostProbe').onclick = async (e) => {
@@ -54,19 +57,20 @@ $('hostProbe').onclick = async (e) => {
 };
 
 /* ------------------------------------------------------------------ one customer = one project */
-const skipped = (s) => s.onlyPlan && s.onlyPlan !== cur.plan;
+const skipped = (s) => (s.onlyPlan && s.onlyPlan !== cur.plan) || (s.onlyKind && s.onlyKind !== cur.kind);
+const reqsOf = (s) => s.reqs.filter((q) => !q.onlyKind || q.onlyKind === cur.kind);
 const resultsOf = (s) => cur.stageStates[s.key].results || {};
 const stageOf = (k) => CFG.stages.find((s) => s.key === k);
 const phaseStats = (ph) => {
 	let total = 0, done = 0, any = false, checked = false;
-	for (const k of ph.stages) { const s = stageOf(k); if (skipped(s)) continue; any = true; total += s.reqs.length; done += s.reqs.filter((q) => SAT.has(resultsOf(s)[q.id]?.state)).length; if (cur.stageStates[k].at) checked = true; }
+	for (const k of ph.stages) { const s = stageOf(k); if (skipped(s)) continue; any = true; total += reqsOf(s).length; done += reqsOf(s).filter((q) => SAT.has(resultsOf(s)[q.id]?.state)).length; if (cur.stageStates[k].at) checked = true; }
 	return { total, done, any, checked };
 };
 const firstTodo = () => {
 	for (const s of CFG.stages) {
 		if (skipped(s)) continue;
 		const res = resultsOf(s);
-		for (const q of s.reqs) { const st = res[q.id]?.state; if (!st) return { s, q, unchecked: true }; if (!SAT.has(st) && st !== 'blocked') return { s, q, st }; }
+		for (const q of reqsOf(s)) { const st = res[q.id]?.state; if (!st) return { s, q, unchecked: true }; if (!SAT.has(st) && st !== 'blocked') return { s, q, st }; }
 	}
 	return null;
 };
@@ -83,18 +87,19 @@ async function openChurch(id) {
 function render() {
 	const c = cur, t = firstTodo();
 	const missing = Object.entries(CFG.configured).filter(([, v]) => !v).map(([k]) => SERVICE[k] || k);
-	const allT = CFG.stages.reduce((a, s) => a + (skipped(s) ? 0 : s.reqs.length), 0), allD = CFG.stages.reduce((a, s) => a + (skipped(s) ? 0 : s.reqs.filter((q) => SAT.has(resultsOf(s)[q.id]?.state)).length), 0);
+	const allT = CFG.stages.reduce((a, s) => a + (skipped(s) ? 0 : reqsOf(s).length), 0), allD = CFG.stages.reduce((a, s) => a + (skipped(s) ? 0 : reqsOf(s).filter((q) => SAT.has(resultsOf(s)[q.id]?.state)).length), 0);
 	const ph = PHASES.find((p) => p.id === openPhase);
 	$('detail').innerHTML = `
 	<p><a href="#" id="back">← All customers</a></p>
 	<section class="card proj">
-		<div class="projh"><div><h2 style="margin:0">${esc(c.name)}</h2><div class="hint">${esc(c.domain || 'no domain yet')} · ${PLAN[c.plan]} · preview: ${esc(c.slug)}.${esc(CFG.previewDomain)}</div></div>
+		<div class="projh"><div><h2 style="margin:0">${esc(c.name)}</h2><div class="hint">${esc(c.domain || 'no domain yet')} · ${PLAN[c.plan]} · ${esc(KIND[c.kind])} · preview: ${esc(c.slug)}.${esc(CFG.previewDomain)}</div></div>
 		<div class="projp"><div class="bar"><i style="width:${allT ? Math.round((allD / allT) * 100) : 0}%"></i></div><div class="hint">${allD} of ${allT} tasks done</div></div></div>
 		<div class="nextbox">${t ? (t.unchecked ? '<b>Press "Check everything" to see where this customer stands.</b>' : `<b>Next:</b> ${esc(t.q.label)}`) : '<b>✔ Everything is done for this customer.</b>'}
 		<button class="primary" id="checkAll"${working ? ' disabled' : ''}>${working === 'all' ? 'Checking…' : 'Check everything'}</button></div>
 		<details class="setup"><summary>Customer details</summary>
 		<div class="row3" style="grid-template-columns:2fr 2fr 1fr"><div><label>Church name</label><input id="eName" type="text" value="${esc(c.name)}"></div><div><label>Their current website</label><input id="eDomain" type="text" value="${esc(c.domain)}" placeholder="britanniaunited.ca"></div>
 		<div><label>Plan</label><select id="ePlan"><option value="website"${c.plan === 'website' ? ' selected' : ''}>Website</option><option value="email"${c.plan === 'email' ? ' selected' : ''}>Website + Email</option></select></div></div>
+		<div class="row3" style="grid-template-columns:1fr 2fr 2fr"><div><label>Type</label><select id="eKind"><option value="new"${c.kind === 'new' ? ' selected' : ''}>New site</option><option value="migration"${c.kind === 'migration' ? ' selected' : ''}>From DUDA</option></select></div><div><label>Notes</label><input id="eNotes" type="text" value="${esc(c.notes)}" placeholder="DUDA site name, who to contact, anything useful"></div><div></div></div>
 		<div class="row3" style="grid-template-columns:2fr 2fr auto"><div><label>Contact email</label><input id="eEmail" type="text" value="${esc(c.contactEmail)}"></div><div><label>Mailbox names (Email plan, max 10)</label><input id="eBoxes" type="text" value="${esc((c.mailboxes || []).join(', '))}" placeholder="office, pastor, treasurer"></div><div><button class="primary" id="saveDet">Save</button></div></div>
 		<p class="err" id="dErr"></p></details>
 		${missing.length ? `<p class="need">Not set up on this server yet: ${missing.map(esc).join(', ')}. Tasks that need these show how to do them by hand.</p>` : ''}
@@ -122,23 +127,23 @@ function rowHtml(s, q, blockedStage) {
 
 function stageHtml(s) {
 	const state = cur.stageStates[s.key];
-	if (skipped(s)) return `<section class="card"><h2>${esc(s.title)}</h2><p class="hint">Not needed on the Website plan.</p></section>`;
+	if (skipped(s)) return `<section class="card"><h2>${esc(s.title)}</h2><p class="hint">${s.onlyKind ? 'Not needed for this type of customer.' : 'Not needed on the Website plan.'}</p></section>`;
 	const blocked = state.blockedBy.filter((x) => x !== 'plan'), res = resultsOf(s);
-	const fixable = s.reqs.filter((q) => q.canFix && !q.confirm && ['no', 'error'].includes(res[q.id]?.state)).length;
-	const done = s.reqs.filter((q) => SAT.has(res[q.id]?.state)).length, isBusy = working === 'all' || working === s.key;
-	return `<section class="card stagecard"><div class="stagehd"><h2>${esc(s.title)}</h2><span class="hint">${state.at ? `${done} of ${s.reqs.length} ready` : 'Not checked yet'}</span></div>
+	const fixable = reqsOf(s).filter((q) => q.canFix && !q.confirm && ['no', 'error'].includes(res[q.id]?.state)).length;
+	const done = reqsOf(s).filter((q) => SAT.has(res[q.id]?.state)).length, isBusy = working === 'all' || working === s.key;
+	return `<section class="card stagecard"><div class="stagehd"><h2>${esc(s.title)}</h2><span class="hint">${state.at ? `${done} of ${reqsOf(s).length} ready` : 'Not checked yet'}</span></div>
 		<p class="hint">${esc(s.blurb)}</p>
 		${blocked.length ? `<p class="need">Finish first: ${blocked.map((b) => esc(stageOf(b).title)).join(', ')}. You can still look, but the fix buttons wait.</p>` : ''}
 		<div class="btns"><button class="sm" data-check="${s.key}"${isBusy ? ' disabled' : ''}>${working === s.key ? 'Checking…' : 'Re-check'}</button>
 		${fixable ? `<button class="primary" data-fixall="${s.key}"${blocked.length || working ? ' disabled' : ''}>Fix everything that can be fixed (${fixable})</button>` : ''}</div>
 		${secret && secret.key === s.key ? `<div class="secret">${esc(secret.text)}</div><p class="hint">Copy this now. It isn't saved anywhere.</p>` : ''}
-		<ul class="reqs">${s.reqs.map((q) => rowHtml(s, q, blocked.length)).join('')}</ul></section>`;
+		<ul class="reqs">${reqsOf(s).map((q) => rowHtml(s, q, blocked.length)).join('')}</ul></section>`;
 }
 
 function wire() {
 	$('back').onclick = (e) => { e.preventDefault(); cur = null; $('detail').hidden = true; $('listCard').hidden = false; loadBoard(); };
 	$('saveDet').onclick = async () => {
-		try { await api('/churches/' + cur.id, { method: 'PATCH', body: JSON.stringify({ name: $('eName').value, domain: $('eDomain').value, plan: $('ePlan').value, contactEmail: $('eEmail').value, mailboxes: $('eBoxes').value }) }); cur = await api('/churches/' + cur.id); render(); }
+		try { await api('/churches/' + cur.id, { method: 'PATCH', body: JSON.stringify({ name: $('eName').value, domain: $('eDomain').value, plan: $('ePlan').value, kind: $('eKind').value, notes: $('eNotes').value, contactEmail: $('eEmail').value, mailboxes: $('eBoxes').value }) }); cur = await api('/churches/' + cur.id); render(); }
 		catch (e) { $('dErr').textContent = e.message; }
 	};
 	$('gwOff').onclick = () => confirm('Switch the AI Assistant off for ' + cur.name + '?') && gw(true);

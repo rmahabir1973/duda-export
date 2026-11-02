@@ -128,3 +128,17 @@ code { background: #f1eef5; padding: 2px 6px; border-radius: 4px; user-select: a
 .filterpanel[hidden], .banner[hidden] { display: none; }
 .filterbar input[type=search] { padding: 10px 12px; border: 1px solid #cfd4da; border-radius: 8px; font: inherit; background: #fff; }
 .dirtable td:nth-child(5), .dirtable td:nth-child(6), .dirtable td:nth-child(7) { white-space: nowrap; } .dirtable td:nth-child(1) { min-width: 170px; } .dirtable td:nth-child(11) { white-space: nowrap; }
+.kind { display: inline-block; margin-top: 4px; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 10px; background: #efe7f4; color: #6a1b79; } .kind.migration { background: #e4eefb; color: #1d4e89; }
+#newForm.row3 { grid-template-columns: 2fr 2fr 1.2fr 1.2fr auto; } @media (max-width: 900px) { #newForm.row3 { grid-template-columns: 1fr; } }
+button.pros { border: 1px solid #cfd4da; background: #fff; border-radius: 6px; padding: 3px 8px; font-size: 12px; cursor: pointer; } button.pros:hover { background: #f1eef5; }
+/* assistant */
+#aiBtn { position: fixed; right: 20px; bottom: 20px; z-index: 50; background: var(--p); color: #fff; border: 0; border-radius: 28px; padding: 12px 20px; font: 600 15px inherit; cursor: pointer; box-shadow: 0 6px 20px rgba(60, 20, 80, .35); }
+#aiPanel { position: fixed; right: 20px; bottom: 20px; z-index: 50; width: min(400px, calc(100vw - 24px)); height: min(600px, calc(100vh - 40px)); background: #fff; border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 12px 40px rgba(40, 10, 60, .3); display: flex; flex-direction: column; overflow: hidden; }
+#aiPanel[hidden], #aiBtn[hidden] { display: none; }
+.aih { background: var(--p); color: #fff; padding: 10px 14px; display: flex; justify-content: space-between; align-items: center; } .aih button { background: transparent; color: #fff; border: 1px solid rgba(255,255,255,.5); border-radius: 6px; margin-left: 8px; padding: 2px 8px; cursor: pointer; font-size: 13px; }
+#aiLog { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; background: #faf8fb; }
+.aim { padding: 8px 11px; border-radius: 10px; max-width: 92%; font-size: 14px; line-height: 1.45; word-wrap: break-word; } .aim.user { align-self: flex-end; background: var(--p); color: #fff; } .aim.assistant { align-self: flex-start; background: #fff; border: 1px solid var(--line); }
+.aim.card { align-self: stretch; max-width: 100%; background: #fff8e6; border: 1px solid #f0d58a; } .aim.note { align-self: stretch; max-width: 100%; background: #e9f7ec; border: 1px solid #b7e0c0; } .aim pre { white-space: pre-wrap; margin: 6px 0; user-select: all; }
+.aiact { display: block; margin: 6px 0; } .aibtns { display: flex; gap: 8px; margin-top: 8px; } .aibtns button, .aicopy { border: 1px solid #cfd4da; background: #fff; border-radius: 8px; padding: 6px 12px; cursor: pointer; font: inherit; } .aibtns .aiok { background: var(--p); color: #fff; border-color: var(--p); }
+#aiForm { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line); } #aiForm textarea { flex: 1; resize: none; font: inherit; padding: 8px; border: 1px solid #cfd4da; border-radius: 8px; } #aiForm button { background: var(--p); color: #fff; border: 0; border-radius: 8px; padding: 0 16px; cursor: pointer; font: 600 14px inherit; } #aiForm button:disabled { opacity: .5; }
+.aif { font-size: 11px; color: var(--muted); padding: 0 12px 8px; } .aithink { color: var(--muted); font-style: italic; }

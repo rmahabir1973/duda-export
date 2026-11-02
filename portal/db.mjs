@@ -120,6 +120,19 @@ const MIGRATIONS = [
 	alter table users add column if not exists locked_until timestamptz;
 	alter table sessions add column if not exists stage text not null default 'full';
 	`],
+	[4, `
+	create table if not exists outreach_suppress (email text primary key, reason text not null default '', at timestamptz not null default now());
+	create table if not exists outreach_log (
+		id bigserial primary key, directory_id bigint, email text not null, campaign text not null, sent_by text not null default '',
+		ok boolean not null default false, error text not null default '', sent_at timestamptz not null default now()
+	);
+	create index if not exists outreach_log_email on outreach_log(email, campaign);
+	create index if not exists outreach_log_sent on outreach_log(sent_at);
+	create table if not exists outreach_events (
+		id bigserial primary key, wid text unique, email text not null default '', type text not null, source text not null default '', at timestamptz not null default now()
+	);
+	create index if not exists outreach_events_at on outreach_events(at);
+	`],
 ];
 
 /** Applies any migration not yet applied. Safe to run on every start. */

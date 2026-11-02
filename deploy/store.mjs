@@ -26,8 +26,9 @@ export function createStore(dir) {
 			const domain = input.domain ? normDomain(input.domain) : '';
 			if (domain && !DOMAIN_RE.test(domain)) throw new Error('That does not look like a website address (for example britanniaunited.ca).');
 			const plan = input.plan === 'email' ? 'email' : 'website';
+			const kind = input.kind === 'migration' ? 'migration' : 'new';
 			const c = {
-				id: slug, slug, name, domain, plan, contactEmail: String(input.contactEmail || '').trim().slice(0, 120), notes: String(input.notes || '').slice(0, 2000),
+				id: slug, slug, name, domain, plan, kind, contactEmail: String(input.contactEmail || '').trim().slice(0, 120), notes: String(input.notes || '').slice(0, 2000),
 				mailboxes: [], created: Date.now(), createdBy: by, stages: {}, facts: {}, log: [],
 			};
 			db[slug] = c; save(); return clone(c);
