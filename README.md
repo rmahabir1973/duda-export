@@ -234,3 +234,5 @@ If customers are missing from the board (for example after a redeploy wiped the 
 
 ### Changing PORTAL_ENC_KEY without locking anyone out
 Two-step secrets are encrypted with `PORTAL_ENC_KEY` (or, when that is not set, `SESSION_SECRET`). The portal now also tries `SESSION_SECRET` and any keys listed in `PORTAL_ENC_KEY_OLD` (comma separated) when it opens a secret, and on a successful sign-in it re-saves the secret under the current key. So adding `PORTAL_ENC_KEY` later, or rotating it, does not break existing sign-ins: put the previous key in `PORTAL_ENC_KEY_OLD` until everyone has signed in once. Recovery codes never depend on the key.
+
+Support follow-up (v7.9): routine registrar messages (autorenew order pending, receipts, order status) are no longer treated as deadlines, so they go to the daily digest instead of being escalated. Escalation emails are limited to 8 per run and only for tickets whose last message is recent; older ones and the overflow stay in the queue and are listed in the daily summary email ("Needing a person"). Admins get a **Sort all open tickets again** button to re-run the sorting after changing the knowledge text or rules.

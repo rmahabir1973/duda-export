@@ -18,6 +18,7 @@ export function supportRouter({ need, support }) {
 	r.post('/tickets/:id/escalate', wrap((req) => support.escalate(id(req), by(req))));
 	r.post('/tickets/:id/not-spam', wrap((req) => support.notSpam(id(req), by(req))));
 	r.post('/tickets/:id/retriage', wrap((req) => support.retriage(id(req))));
+	r.post('/retriage-all', admin, wrap(async () => ({ count: await support.retriageOpen() })));
 	r.put('/settings', admin, wrap((req) => support.saveSettings(req.body || {}, by(req))));
 	return r;
 }
