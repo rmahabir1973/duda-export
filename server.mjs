@@ -21,8 +21,10 @@ import { createAssistant } from './portal/assistant.mjs';
 import { assistantRouter } from './portal/assistantRoutes.mjs';
 import { createHosted, makeDudaMcp } from './portal/hosted.mjs';
 import { hostedRouter } from './portal/hostedRoutes.mjs';
-import { makeWhmcsClient, createWhmcs } from './portal/whmcs.mjs';
+import { makeWhmcsClient, createWhmcs, SUPPORT_ACTIONS } from './portal/whmcs.mjs';
 import { whmcsRouter } from './portal/whmcsRoutes.mjs';
+import { createSupport } from './portal/support.mjs';
+import { supportRouter } from './portal/supportRoutes.mjs';
 import { createAnalytics, makeGa4 } from './portal/analytics.mjs';
 import { analyticsRouter } from './portal/analyticsRoutes.mjs';
 import { createAccessGuard } from './portal/access.mjs';
@@ -353,7 +355,9 @@ if (hosted) {
 	const hours = Number(env.HOSTED_SYNC_HOURS ?? 6);
 	if (hours > 0) { const run = () => hosted.sync().then((r) => console.log('hosted sync:', Object.entries(r).map(([k, v]) => `${k} ${v.ok ? v.count : 'failed'}`).join(', '))).catch((e) => console.error('hosted sync:', e.message)); setTimeout(run, 45000).unref(); setInterval(run, hours * 3600 * 1000).unref(); }
 }
-const whmcs = portal && portalDb ? createWhmcs({ db: portalDb, whmcs: makeWhmcsClient({ url: (env.WHMCS_URL || '').trim(), identifier: (env.WHMCS_API_IDENTIFIER || env.WHMCS_API_ID || '').trim(), secret: (env.WHMCS_API_SECRET || '').trim(), accessKey: (env.WHMCS_ACCESS_KEY || '').trim() }) }) : null;
+const whmcsCfg = { url: (env.WHMCS_URL || '').trim(), accessKey: (env.WHMCS_ACCESS_KEY || '').trim() };
+const whmcsClient = makeWhmcsClient({ ...whmcsCfg, identifier: (env.WHMCS_API_IDENTIFIER || env.WHMCS_API_ID || '').trim(), secret: (env.WHMCS_API_SECRET || '').trim() });
+const whmcs = portal && portalDb ? createWhmcs({ db: portalDb, whmcs: whmcsClient }) : null;
 if (whmcs) {
 	app.use('/api/whmcs', whmcsRouter({ need, whmcs, audit: portal.audit }));
 	const wh = Number(env.WHMCS_SYNC_HOURS ?? 12);
@@ -365,9 +369,19 @@ if (portal && portalDb) {
 	analytics = createAnalytics({ db: portalDb, clients: deployClients, ga4, store: deployStore, whmcs, hosted, ownDomains: (env.OWN_DOMAINS || 'churchwebglobal.com,churchwebsupport.com').split(',').map((x) => x.trim()).filter(Boolean) });
 	app.use('/api/analytics', analyticsRouter({ need, analytics }));
 }
+let assistant = null, support = null;
 if (portal) {
-	const assistant = createAssistant({ tools: buildTools({ store: deployStore, clients: deployClients, dir: portal.dir, outreach, audit: portal.audit, hosted, whmcs, analytics }), audit: portal.audit, clients: deployClients, env });
+	assistant = createAssistant({ tools: buildTools({ store: deployStore, clients: deployClients, dir: portal.dir, outreach, audit: portal.audit, hosted, whmcs, analytics, getSupport: () => support }), audit: portal.audit, clients: deployClients, env });
 	app.use('/api/assistant', assistantRouter({ need, assistant }));
+}
+if (portal && portalDb && assistant) {
+	// Support has its own WHMCS login (ticket actions only). Billing stays read-only. With only the billing login, tickets can be read but not answered.
+	const supportClient = makeWhmcsClient({ ...whmcsCfg, identifier: (env.WHMCS_SUPPORT_API_ID || '').trim(), secret: (env.WHMCS_SUPPORT_API_SECRET || '').trim(), actions: SUPPORT_ACTIONS });
+	const mail = deployClients.cfg.postmarkServerToken ? { send: ({ to, subject, text }) => deployClients.postmark.sendEmail({ From: (env.SUPPORT_FROM || 'support@churchwebglobal.com').trim(), To: to.join(','), Subject: subject, TextBody: text, MessageStream: 'outbound' }) } : null;
+	support = createSupport({ db: portalDb, reader: supportClient.available() ? supportClient : whmcsClient, writer: supportClient, ai: { available: () => assistant.configured(), complete: assistant.complete }, mail, env });
+	app.use('/api/support', supportRouter({ need, support }));
+	const mins = Number(env.SUPPORT_POLL_MINUTES ?? 5);
+	if (mins > 0) { const run = () => support.run().then((r) => r.skipped || console.log('support:', `${r.synced} changed, ${r.triaged} sorted, ${r.acted} handled${r.errors.length ? ', problems: ' + r.errors.join('; ') : ''}`)).catch((e) => console.error('support:', e.message)); setTimeout(run, 120000).unref(); setInterval(run, mins * 60000).unref(); }
 }
 if (outreach) app.use('/api/outreach', outreachRouter({ need, outreach, loops, webhookSecret: LOOPS_WEBHOOK_SECRET }));
 app.get('/email', page('email.html'));
@@ -376,6 +390,7 @@ app.get('/directory', page('directory.html', { dbOnly: true }));
 app.get('/activity', page('activity.html', { dbOnly: true }));
 app.get('/domains', page('domains.html', { dbOnly: true }));
 app.get('/whmcs', page('whmcs.html', { dbOnly: true }));
+app.get('/support', page('support.html', { dbOnly: true }));
 app.get('/analytics', page('analytics.html', { dbOnly: true }));
 app.get('/users', page('users.html', { dbOnly: true }));
 app.get('/account', page('account.html', { dbOnly: true }));

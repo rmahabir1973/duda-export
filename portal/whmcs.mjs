@@ -2,7 +2,9 @@
 // Nothing here can change WHMCS: only the actions in READ_ACTIONS can be called, and the sync stores a snapshot in Neon.
 import { csvLine } from './directory.mjs';
 
-export const READ_ACTIONS = new Set(['GetClients', 'GetClientsProducts', 'GetInvoices', 'GetPaymentMethods']);
+export const READ_ACTIONS = new Set(['GetClients', 'GetClientsProducts', 'GetInvoices', 'GetPaymentMethods', 'GetTickets', 'GetTicket']);
+/** The support login may also answer, close and flag tickets, and nothing else. It is a different WHMCS API credential from the billing one, which can never write. */
+export const SUPPORT_ACTIONS = new Set(['GetTickets', 'GetTicket', 'AddTicketReply', 'UpdateTicket']);
 export const CYCLE_MONTHS = { monthly: 1, quarterly: 3, 'semi-annually': 6, annually: 12, biennially: 24, triennially: 36 };
 export const CATEGORIES = { card: 'Card / PayPal', cheque: 'Cheque / mail-in', bank: 'Bank transfer / e-transfer / PAD', other: 'Other', none: 'No payment method set' };
 export const CATEGORY_KEYS = Object.keys(CATEGORIES);
@@ -26,14 +28,14 @@ const friendly = (m) => {
 };
 
 /** A small, read-only WHMCS API client. The secret only ever goes in the request body, never in a URL, a log line or an error. */
-export function makeWhmcsClient({ url, identifier, secret, accessKey = '', fetchImpl = globalThis.fetch }) {
+export function makeWhmcsClient({ url, identifier, secret, accessKey = '', fetchImpl = globalThis.fetch, actions = READ_ACTIONS }) {
 	const base = String(url || '').trim().replace(/\/+$/, '').replace(/\/includes\/api\.php$/i, '');
 	const host = (() => { try { return new URL(base).hostname; } catch { return ''; } })();
 	const local = host === 'localhost' || host === '127.0.0.1';
 	const self = {
 		available: () => !!(base && identifier && secret),
 		async call(action, params = {}) {
-			if (!READ_ACTIONS.has(action)) throw new Error(`The portal only reads from WHMCS; "${action}" is not allowed.`);
+			if (!actions.has(action)) throw new Error(actions === READ_ACTIONS ? `The portal only reads from WHMCS; "${action}" is not allowed.` : `This WHMCS login may only use ${[...actions].join(', ')}; "${action}" is not allowed.`);
 			if (!self.available()) throw new Error('WHMCS is not set up (WHMCS_URL, WHMCS_API_IDENTIFIER, WHMCS_API_SECRET).');
 			if (!/^https:\/\//i.test(base) && !local) throw new Error('WHMCS_URL must start with https:// so the API login is not sent in the clear.');
 			const body = new URLSearchParams({ identifier, secret, action, responsetype: 'json', ...(accessKey ? { accesskey: accessKey } : {}), ...Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)])) });

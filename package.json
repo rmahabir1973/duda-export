@@ -6,7 +6,7 @@
   "description": "Password-protected web front end for duda-export: run a DUDA site export from a browser (or an agent) and download the ZIP.",
   "scripts": {
     "start": "node server.mjs",
-    "test": "node --test test/deploy.test.mjs test/portal.test.mjs test/v71.test.mjs test/whmcs.test.mjs test/analytics.test.mjs test/assistant2.test.mjs"
+    "test": "node --test test/deploy.test.mjs test/portal.test.mjs test/v71.test.mjs test/whmcs.test.mjs test/analytics.test.mjs test/assistant2.test.mjs test/support.test.mjs"
   },
   "engines": {
     "node": ">=20"

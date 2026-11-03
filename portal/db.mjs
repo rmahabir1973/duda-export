@@ -143,6 +143,19 @@ const MIGRATIONS = [
 		first_seen timestamptz not null default now(), updated_at timestamptz not null default now()
 	);
 	`],
+	[6, `
+	create table if not exists support_tickets (
+		id bigint primary key, tid text not null default '', subject text not null default '', sender text not null default '', sender_name text not null default '', client_id bigint not null default 0,
+		status text not null default '', created timestamptz, last_reply timestamptz, last_by_customer boolean not null default true, messages int not null default 0,
+		fp text not null default '', excerpt text not null default '',
+		category text not null default '', priority int not null default 3, summary text not null default '', needs_human boolean not null default false, reason text not null default '',
+		confidence real not null default 0, has_deadline boolean not null default false, sentiment text not null default '', kb_basis text not null default '', draft text not null default '',
+		action text not null default '', state text not null default 'new', handled_by text not null default '', handled_at timestamptz, digest_at timestamptz, error text not null default '', updated_at timestamptz not null default now()
+	);
+	create index if not exists support_tickets_state on support_tickets(state, priority);
+	create table if not exists support_log (id bigserial primary key, at timestamptz not null default now(), ticket_id bigint, action text not null, who text not null default '', detail text not null default '');
+	create index if not exists support_log_at on support_log(at desc);
+	`],
 ];
 
 /** Applies any migration not yet applied. Safe to run on every start. */

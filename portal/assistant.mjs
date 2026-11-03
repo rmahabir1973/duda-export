@@ -108,8 +108,18 @@ ${PORTAL_GUIDE}`;
 		return { messages, text: 'I went round in circles on that one. Tell me a bit more about what you need.' };
 	}
 
+	/** One plain question to the model with no tools (used for ticket triage). The text it gets is data to analyse, never instructions. */
+	async function complete(systemText, text, { maxTokens = 1200 } = {}) {
+		if (!configured()) throw new Error('The AI is not set up: it needs GATEWAY_ADMIN_KEY (or ANTHROPIC_API_KEY) in Railway.');
+		const ep = await endpoint();
+		const r = await fetchImpl(ep.url, { method: 'POST', headers: { 'x-api-key': ep.key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, body: JSON.stringify({ model: model(), max_tokens: maxTokens, system: systemText, messages: [{ role: 'user', content: text }] }) });
+		const j = await r.json().catch(() => ({}));
+		if (!r.ok) { if (r.status === 401 || r.status === 403) gwToken = null; throw new Error(r.status === 429 ? 'The AI has reached its daily limit.' : `The AI is unavailable (${j.error?.message || 'HTTP ' + r.status}).`); }
+		return textOf(j.content);
+	}
+
 	return {
-		configured,
+		configured, complete,
 		async chat(user, rawMessages, { page = '' } = {}) { return loop(user, clean(rawMessages), page); },
 		/** decisions: { [toolUseId]: true|false }. Only what the assistant proposed (kept here, not taken from the browser) can run. */
 		async resolve(user, { groupId, decisions, messages: raw, page = '' }) {

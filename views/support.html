@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Support · ChurchWeb Portal</title><meta name="robots" content="noindex,nofollow"><link rel="stylesheet" href="/assets/style.css"></head>
+<body><header id="topbar"></header><script src="/assets/nav.js"></script>
+<main class="wide"><section class="card"><h2>Support</h2><p class="hint">The WHMCS support tickets, sorted by the assistant: real tickets first by priority, spam and registrar notices (Ascio) out of the way. It drafts replies from the knowledge text below and only answers what that text covers; everything else goes to a person.</p>
+<div id="banner"></div>
+<div class="btns"><button class="primary" id="run" type="button">Check tickets now</button><span id="modeBox"></span><span class="hint" id="runMsg"></span></div>
+<ul class="res" id="health"></ul>
+<div class="statgrid" id="stats"></div>
+<div class="filterbar"><input id="q" type="search" placeholder="Search a subject, sender or summary"><select id="state"><option value="open">Open tickets</option><option value="escalated">Needs a person</option><option value="triaged">Waiting / draft ready</option><option value="replied">Replied</option><option value="spam_closed">Closed as spam</option><option value="digested">Registrar notices (digest)</option><option value="closed">Closed</option><option value="answered">Answered by staff</option><option value="all">Everything</option></select><select id="cat"><option value="">All kinds</option></select></div>
+<div class="tablewrap"><table class="dirtable" style="min-width:0"><thead><tr><th>Priority</th><th>Ticket</th><th>From</th><th>Kind</th><th>What they want</th><th>Status</th><th>Last message</th></tr></thead><tbody id="rows"></tbody></table></div>
+<div class="pager"><button class="sm" id="prev">← Previous</button><span id="page"></span><button class="sm" id="next">Next →</button></div><p class="err" id="err"></p>
+<details class="sect" id="s-set"><summary>Settings and knowledge text (admins)</summary><div id="settings"></div></details>
+<details class="sect" id="s-log"><summary>What the assistant did</summary><div id="log"></div></details>
+</section></main>
+<script src="/assets/support.js"></script></body></html>
