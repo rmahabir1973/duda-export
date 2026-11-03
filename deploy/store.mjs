@@ -7,14 +7,31 @@ export const DOMAIN_RE = /^(?=.{4,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)
 export const slugify = (s) => String(s || '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30).replace(/-+$/g, '');
 export const normDomain = (d) => String(d || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/[/?#].*$/, '');
 
-export function createStore(dir) {
-	fs.mkdirSync(dir, { recursive: true });
+/** One record per church. Kept in memory and saved on every change: to a file in `dir`, and (when a database is given) to Neon, so a redeploy that wipes the file loses nothing.
+ *  Call `await store.init()` once at start-up: it loads from the database, or seeds the database from the file the first time. */
+export function createStore(dir, { db: sql = null, log: say = console.error } = {}) {
+	let fileOk = true;
+	try { fs.mkdirSync(dir, { recursive: true }); } catch { fileOk = false; }
 	const file = path.join(dir, 'churches.json');
 	let db = {};
 	try { db = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { db = {}; }
-	const save = () => { const tmp = file + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(db, null, 2)); fs.renameSync(tmp, file); };
+	let queue = Promise.resolve();
+	const KEY = 'deploy_churches';
+	const toDb = () => { if (!sql) return; const snap = JSON.stringify(db); queue = queue.then(() => sql.query('insert into kv (key, value) values ($1, $2::jsonb) on conflict (key) do update set value = excluded.value, updated_at = now()', [KEY, snap])).catch((e) => say('customer board: could not save to the database:', e.message)); };
+	const save = () => {
+		if (fileOk) { try { const tmp = file + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(db, null, 2)); fs.renameSync(tmp, file); } catch (e) { fileOk = false; say('customer board: the data folder is not writable:', e.message); } }
+		toDb();
+	};
 	const clone = (o) => JSON.parse(JSON.stringify(o));
 	return {
+		/** The database is the source of truth once it has a copy; before that, whatever was in the file is copied into it. */
+		async init() {
+			if (!sql) return { source: 'file', count: Object.keys(db).length };
+			const row = (await sql.query('select value from kv where key = $1', [KEY]))[0];
+			if (row && row.value && typeof row.value === 'object') { db = row.value; return { source: 'database', count: Object.keys(db).length }; }
+			toDb(); await queue; return { source: 'seeded from file', count: Object.keys(db).length };
+		},
+		flush: () => queue,
 		list: () => Object.values(db).map(clone).sort((a, b) => b.created - a.created),
 		get: (id) => (db[id] ? clone(db[id]) : null),
 		create(input, by = '') {
