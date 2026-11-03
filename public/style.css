@@ -149,3 +149,6 @@ button.pros { border: 1px solid #cfd4da; background: #fff; border-radius: 6px; p
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-top: 14px; } .up { color: #1a7f37; } .down { color: #b42318; } .stat .chg { font-size: 12px; font-weight: 600; }
 @media (max-width: 800px) { .grid2 { grid-template-columns: 1fr; } }
 .sm.on { background: var(--p); color: #fff; border-color: var(--p); }
+th[data-sort] { cursor: pointer; user-select: none; } th[data-sort]:hover { color: var(--p); }
+details.sect { margin: 14px 0; } details.sect > summary { cursor: pointer; font-weight: 700; font-size: 17px; padding: 6px 0; list-style: none; } details.sect > summary::before { content: '▾'; display: inline-block; width: 1.2em; color: var(--p); } details.sect:not([open]) > summary::before { content: '▸'; }
+details.sect > summary::-webkit-details-marker { display: none; } .res details.sect > summary { font-size: 14px; font-weight: 600; color: #8a1c1c; }

@@ -148,6 +148,7 @@ test('a record WHMCS cannot encode (Malformed UTF-8) is skipped and named, and e
 	const snap = await readSnapshot(w, { now: NOW });
 	assert.deepEqual(snap.clients.map((c) => c.id), [1, 2, 4, 5, 7], 'the 3rd and 6th customers are left out, all others are kept');
 	assert.deepEqual(snap.skipped.map((x) => [x.what, x.afterId]), [['customer', 2], ['customer', 5]], 'each skipped record is described by the ID before it');
+	assert.deepEqual(snap.skipped.map((x) => [x.afterId, x.beforeId, x.count]), [[2, 4, 1], [5, 7, 1]], 'each gap names the IDs on both sides');
 	assert.ok(calls < 60, 'found by halving the page, not by asking one record at a time');
 	// any other WHMCS error still stops the sync
 	const other = makeWhmcsClient({ url: 'https://my.example.ca', identifier: 'id1', secret: SECRET, fetchImpl: async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ result: 'error', message: 'Access Denied' }) }) });
@@ -155,4 +156,10 @@ test('a record WHMCS cannot encode (Malformed UTF-8) is skipped and named, and e
 	// and the stored result tells the person
 	const db = await fresh(), st = createWhmcs({ db, whmcs: w, log: () => {} }), res = await st.sync();
 	assert.equal(res.ok, true); assert.equal(res.skipped.length, 2); assert.equal((await st.status()).last.skipped[0].afterId, 2);
+});
+
+test('skipped records next to each other are grouped with a count', async () => {
+	const { groupSkips } = await import('../portal/whmcs.mjs');
+	const g = groupSkips([{ what: 'service', offset: 14, afterId: 14 }, { what: 'service', offset: 15, afterId: 14 }, { what: 'service', offset: 16, afterId: 14 }, { what: 'service', offset: 30, afterId: 20 }, { what: 'customer', offset: 0, afterId: null }], { service: [{ id: 14 }, { id: 18 }, { id: 20 }, { id: 22 }], customer: [{ id: 3 }] });
+	assert.deepEqual(g, [{ what: 'service', afterId: 14, beforeId: 18, count: 3 }, { what: 'service', afterId: 20, beforeId: 22, count: 1 }, { what: 'customer', afterId: null, beforeId: 3, count: 1 }]);
 });

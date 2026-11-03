@@ -209,6 +209,11 @@ Needs in Railway: `GOOGLE_ANALYTICS_PROPERTY_ID` (the numeric GA4 property ID, n
 
 The WHMCS sync now copes with a record that WHMCS cannot encode ("Malformed UTF-8"): it splits the page until that record is alone, leaves it out, finishes the sync, and the WHMCS tab names the record's neighbour so it can be repaired in WHMCS.
 
+### Assistant knows the whole portal, and sorting (v7.7)
+The assistant now has a built-in guide to every screen (what each does, how fresh its data is), knows which screen the person is on ("this page"), and can answer from the new data: `whmcs_summary` and `whmcs_customers` (filter by payment kind, search, and **sort** by name, email, status, services, payment kind, annual amount or next due date, either direction), `analytics_overview` (any Analytics source for 7, 30 or 90 days, with long daily lists summarised) and `recent_activity` (who did what in the portal). These four are **admin only**: they are not offered to staff, and a forged call to one is refused. The WHMCS customer table can also be sorted by clicking a column heading. Sections on the WHMCS and Analytics screens can be collapsed, and the portal remembers which you closed. Records WHMCS could not return are listed in a closed-by-default note, grouped, with the IDs on each side so they can be found and repaired.
+
+Note for admins: when the assistant answers a billing question, the customer names, emails and amounts it looked up are sent to the AI model that powers it (through your gateway), like everything else it reads. No card numbers exist in the portal's WHMCS copy.
+
 ### Domains we host (sync)
 The **Domains** tab lists every domain found in Cloudflare (the churches account), DUDA (published sites' custom domains), SmarterMail (email domains) and Hostinger (sites and parked domains), and shows the gaps (for example "in DUDA, not in Cloudflare"). It syncs on start (after 45 seconds) and every 6 hours (`HOSTED_SYNC_HOURS`, `0` turns it off), or press Sync now. Each source reports its own result; one failing never wipes the others. Everything found (except our own domains, `OWN_DOMAINS`, default `churchwebglobal.com,churchwebsupport.com`) becomes a customer domain, so the Directory's customer marks and the assistant's `lookup_domain` answer "do we host this church?" from real data.
 

@@ -359,13 +359,14 @@ if (whmcs) {
 	const wh = Number(env.WHMCS_SYNC_HOURS ?? 12);
 	if (wh > 0 && whmcs.available()) { const run = () => whmcs.sync().then((r) => console.log('whmcs sync:', r.ok ? `${r.clients} clients, ${r.services} services, ${r.invoices} invoices` : 'failed')).catch((e) => console.error('whmcs sync:', e.message)); setTimeout(run, 90000).unref(); setInterval(run, wh * 3600 * 1000).unref(); }
 }
+let analytics = null;
 if (portal && portalDb) {
 	const ga4 = makeGa4({ propertyId: (env.GOOGLE_ANALYTICS_PROPERTY_ID || '').trim(), email: (env.GOOGLE_SERVICE_ACCOUNT_EMAIL || '').trim(), key: env.GOOGLE_SERVICE_ACCOUNT_KEY || '' });
-	const analytics = createAnalytics({ db: portalDb, clients: deployClients, ga4, store: deployStore, whmcs, hosted, ownDomains: (env.OWN_DOMAINS || 'churchwebglobal.com,churchwebsupport.com').split(',').map((x) => x.trim()).filter(Boolean) });
+	analytics = createAnalytics({ db: portalDb, clients: deployClients, ga4, store: deployStore, whmcs, hosted, ownDomains: (env.OWN_DOMAINS || 'churchwebglobal.com,churchwebsupport.com').split(',').map((x) => x.trim()).filter(Boolean) });
 	app.use('/api/analytics', analyticsRouter({ need, analytics }));
 }
 if (portal) {
-	const assistant = createAssistant({ tools: buildTools({ store: deployStore, clients: deployClients, dir: portal.dir, outreach, audit: portal.audit, hosted }), audit: portal.audit, clients: deployClients, env });
+	const assistant = createAssistant({ tools: buildTools({ store: deployStore, clients: deployClients, dir: portal.dir, outreach, audit: portal.audit, hosted, whmcs, analytics }), audit: portal.audit, clients: deployClients, env });
 	app.use('/api/assistant', assistantRouter({ need, assistant }));
 }
 if (outreach) app.use('/api/outreach', outreachRouter({ need, outreach, loops, webhookSecret: LOOPS_WEBHOOK_SECRET }));
