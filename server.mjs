@@ -242,7 +242,7 @@ if (dbUrl) {
 		const db = await connectDb(dbUrl);
 		await migrate(db); portalDb = db;
 		if (!env.PORTAL_ENC_KEY) console.warn('portal: PORTAL_ENC_KEY is not set, so the 2FA secrets are encrypted with a key derived from SESSION_SECRET / APP_PASSWORD. Set PORTAL_ENC_KEY (a long random value) in Railway and never change it.');
-		portal = await createPortal({ db, sessionHours: SESSION_HOURS, apiToken: API_TOKEN, bootstrapPassword: APP_PASSWORD, requireTwoFactor: env.REQUIRE_2FA !== '0', encryptionKey: env.PORTAL_ENC_KEY || SESSION_SECRET, hooks: { locked: (ip) => locked(ip), noteFail: (ip) => noteFail(ip), clearFail: (ip) => fails.delete(ip) } });
+		portal = await createPortal({ db, sessionHours: SESSION_HOURS, apiToken: API_TOKEN, bootstrapPassword: APP_PASSWORD, requireTwoFactor: env.REQUIRE_2FA !== '0', encryptionKey: env.PORTAL_ENC_KEY || SESSION_SECRET, previousKeys: [SESSION_SECRET, ...(env.PORTAL_ENC_KEY_OLD || '').split(',').map((x) => x.trim())].filter(Boolean), hooks: { locked: (ip) => locked(ip), noteFail: (ip) => noteFail(ip), clearFail: (ip) => fails.delete(ip) } });
 		console.log(`portal: database connected, user accounts are on, two-factor ${env.REQUIRE_2FA === '0' ? 'OFF (REQUIRE_2FA=0)' : 'required'}`);
 		if (env.RESET_2FA_FOR) { const done = await portal.auth.resetTwoFactorByEmail(env.RESET_2FA_FOR); console.warn(`portal: RESET_2FA_FOR is set: ${done ? 'cleared 2FA for ' + env.RESET_2FA_FOR : 'no account ' + env.RESET_2FA_FOR}. Remove the variable now.`); }
 	} catch (e) { console.error('portal: database not available, using the single password login instead:', e.message); }

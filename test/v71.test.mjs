@@ -302,3 +302,36 @@ test('board recovery: Hostinger sites missing from the board are offered with th
 	assert.deepEqual(r.created.map((x) => x.slug), ['erindale-united']); assert.equal(store.get('erindale-united').kind, 'migration'); assert.equal(store.get('erindale-united').domain, 'erindaleunited.church');
 	assert.deepEqual((await h.boardCandidates(store)).map((x) => x.slug), ['grace-united'], 'added sites are no longer offered');
 });
+
+/* ---------------------------------------------------------------- an encryption key that changed must not lock people out */
+import { createAuth, totpNow } from '../portal/auth.mjs';
+const PWX = 'Correct-Horse-9';
+
+async function enrolledUser(keyA) {
+	const db = await fresh(), a = createAuth(db, { encryptionKey: keyA });
+	const s = await a.login('boss@example.org', PWX, { bootstrapPassword: PWX });
+	const { secret } = await a.enrolStart(s.token); const e = await a.enrolFinish(s.token, totpNow(secret, Date.now() - 30000));
+	return { db, secret, recoveryCodes: e.recoveryCodes };
+}
+
+test('key change: the old key is tried as a fallback, the sign-in works, and the secret is moved to the new key', async () => {
+	const { db, secret } = await enrolledUser('old-session-secret');
+	const b = createAuth(db, { encryptionKey: 'brand-new-PORTAL_ENC_KEY', previousKeys: ['old-session-secret'] });
+	let l = await b.login('boss@example.org', PWX); assert.equal(l.need, 'code');
+	assert.ok((await b.secondFactor(l.token, totpNow(secret))).token, 'the authenticator code works after the key change');
+	// the secret was re-saved under the new key: now it works with no fallback at all
+	const c = createAuth(db, { encryptionKey: 'brand-new-PORTAL_ENC_KEY' });
+	l = await c.login('boss@example.org', PWX); assert.ok((await c.secondFactor(l.token, totpNow(secret, Date.now() + 30000))).token);
+});
+
+test('key change: with no fallback, a recovery code still signs in, and a wrong code gets a plain explanation', async () => {
+	const { db, secret, recoveryCodes } = await enrolledUser('old-session-secret');
+	const b = createAuth(db, { encryptionKey: 'brand-new-PORTAL_ENC_KEY' });
+	let l = await b.login('boss@example.org', PWX);
+	await assert.rejects(() => b.secondFactor(l.token, totpNow(secret)), /can't read your authenticator setup.*recovery codes.*admin/s);
+	const viaRecovery = await b.secondFactor(l.token, recoveryCodes[0]); assert.equal(viaRecovery.usedRecovery, true); assert.ok(viaRecovery.token);
+	// an admin reset then lets them enrol again under the new key
+	const u = (await db.query("select id from users where email = 'boss@example.org'"))[0]; await b.resetTwoFactor(u.id);
+	const s = await b.login('boss@example.org', PWX); assert.equal(s.need, 'enroll');
+	const e = await b.enrolStart(s.token); assert.ok((await b.enrolFinish(s.token, totpNow(e.secret))).token);
+});

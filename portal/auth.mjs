@@ -61,9 +61,14 @@ const LOCK_AFTER = 5, LOCK_MINUTES = 15;
 
 const publicUser = (u) => u && { id: Number(u.id), email: u.email, name: u.name, role: u.role, active: u.active, mustChange: u.must_change, createdAt: u.created_at, lastLogin: u.last_login, twoFactor: !!u.totp_enabled, locked: !!(u.locked_until && new Date(u.locked_until) > new Date()) };
 
-export function createAuth(db, { sessionHours = 12, requireTwoFactor = true, encryptionKey = '' } = {}) {
+export function createAuth(db, { sessionHours = 12, requireTwoFactor = true, encryptionKey = '', previousKeys = [] } = {}) {
 	if (!encryptionKey) throw new Error('createAuth needs an encryption key for the two-factor secrets.');
 	const maxAgeMs = sessionHours * 3600 * 1000, absoluteMs = 7 * 86400 * 1000;
+	/** Opens a sealed secret with the current key, or an earlier one (a key that was in use before PORTAL_ENC_KEY changed). Returns null if none fit. */
+	const openSecret = (sealed) => {
+		for (const [i, k] of [encryptionKey, ...previousKeys.filter((x) => x && x !== encryptionKey)].entries()) { try { return { secret: unseal(sealed, k), old: i > 0 }; } catch { /* try the next key */ } }
+		return null;
+	};
 	const self = {
 		async userCount() { return Number((await db.query('select count(*)::int as n from users'))[0].n); },
 		async listUsers() { return (await db.query('select * from users order by lower(email)')).map(publicUser); },
@@ -170,7 +175,7 @@ export function createAuth(db, { sessionHours = 12, requireTwoFactor = true, enc
 		},
 		async enrolFinish(token, code, { ip = '', ua = '' } = {}) {
 			const u = await self.pending(token); if (!u || !u.totp_pending) throw new Error('Start the setup again.');
-			const secret = unseal(u.totp_pending, encryptionKey), step = checkTotp(secret, code, 0);
+			const opened = openSecret(u.totp_pending); if (!opened) throw new Error('Start the setup again.'); const secret = opened.secret, step = checkTotp(secret, code, 0);
 			if (!step) { if (await self._fail(u)) throw new Error('Too many wrong codes. The account is locked for ' + LOCK_MINUTES + ' minutes.'); throw new Error('That code isn\'t right. Check the 6 digits in your app and that your phone\'s clock is automatic.'); }
 			const codes = newRecoveryCodes();
 			await db.query('update users set totp_secret = $2, totp_pending = null, totp_enabled = true, totp_last_step = $3, recovery_codes = $4 where id = $1', [u.id, seal(secret, encryptionKey), step, JSON.stringify(codes.map((c) => sha(normCode(c))))]);
@@ -180,12 +185,16 @@ export function createAuth(db, { sessionHours = 12, requireTwoFactor = true, enc
 		async secondFactor(token, code, { ip = '', ua = '' } = {}) {
 			const u = await self.pending(token); if (!u) throw new Error('Sign in again.');
 			if (u.locked_until && new Date(u.locked_until) > new Date()) throw new Error('This account is locked for a few minutes after too many wrong codes.');
-			const step = u.totp_secret ? checkTotp(unseal(u.totp_secret, encryptionKey), code, u.totp_last_step) : 0;
-			if (step) { await db.query('update users set totp_last_step = $2 where id = $1', [u.id, step]); return { ...(await self._promote(token, u, ip, ua)), usedRecovery: false }; }
+			const opened = u.totp_secret ? openSecret(u.totp_secret) : null, unreadable = !!u.totp_secret && !opened;
+			const step = opened ? checkTotp(opened.secret, code, u.totp_last_step) : 0;
+			if (step) {
+				await db.query('update users set totp_last_step = $2 where id = $1', [u.id, step]);
+				if (opened.old) await db.query('update users set totp_secret = $2 where id = $1', [u.id, seal(opened.secret, encryptionKey)]); // quietly move it to the current key
+				return { ...(await self._promote(token, u, ip, ua)), usedRecovery: false }; }
 			const h = sha(normCode(code)), rec = (u.recovery_codes || []);
 			if (normCode(code).length === 10 && rec.includes(h)) { await db.query('update users set recovery_codes = $2 where id = $1', [u.id, JSON.stringify(rec.filter((x) => x !== h))]); return { ...(await self._promote(token, u, ip, ua)), usedRecovery: true, recoveryLeft: rec.length - 1 }; }
 			if (await self._fail(u)) throw new Error('Too many wrong codes. The account is locked for ' + LOCK_MINUTES + ' minutes.');
-			throw new Error('That code isn\'t right.');
+			throw new Error(unreadable ? 'The portal can\'t read your authenticator setup (its encryption key changed). Use one of your recovery codes, or ask an admin to reset your two-step sign-in.' : 'That code isn\'t right.');
 		},
 		/** An admin clears someone's 2FA (lost phone). They must enrol again at their next sign-in. */
 		async resetTwoFactor(id) {
@@ -199,7 +208,7 @@ export function createAuth(db, { sessionHours = 12, requireTwoFactor = true, enc
 		async regenerateRecovery(id, password, code) {
 			const u = (await db.query('select * from users where id = $1', [id]))[0];
 			if (!u || !u.totp_enabled || !(await verifyPassword(password, u.password_hash))) throw new Error('Your password isn\'t right.');
-			const step = checkTotp(unseal(u.totp_secret, encryptionKey), code, u.totp_last_step);
+			const opened = openSecret(u.totp_secret), step = opened ? checkTotp(opened.secret, code, u.totp_last_step) : 0;
 			if (!step) throw new Error('That code isn\'t right.');
 			const codes = newRecoveryCodes();
 			await db.query('update users set totp_last_step = $2, recovery_codes = $3 where id = $1', [id, step, JSON.stringify(codes.map((c) => sha(normCode(c))))]);

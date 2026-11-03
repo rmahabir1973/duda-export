@@ -203,3 +203,6 @@ Everything that matters is in Neon: accounts, sessions, the activity log, the di
 
 ### Rebuilding the Customers board from Hostinger
 If customers are missing from the board (for example after a redeploy wiped the old file), open **Domains**: any site on Hostinger named `slug.churchwebglobal.com` that is not on the board is listed, with the real domain parked on it and a guess at the type (from DUDA if that domain is also a DUDA site). Tick them and press "Add". Then open each customer and press "Check everything" to bring its tasks up to date.
+
+### Changing PORTAL_ENC_KEY without locking anyone out
+Two-step secrets are encrypted with `PORTAL_ENC_KEY` (or, when that is not set, `SESSION_SECRET`). The portal now also tries `SESSION_SECRET` and any keys listed in `PORTAL_ENC_KEY_OLD` (comma separated) when it opens a secret, and on a successful sign-in it re-saves the secret under the current key. So adding `PORTAL_ENC_KEY` later, or rotating it, does not break existing sign-ins: put the previous key in `PORTAL_ENC_KEY_OLD` until everyone has signed in once. Recovery codes never depend on the key.
