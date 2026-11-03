@@ -25,8 +25,8 @@ const LABELS = [
 const SAFE_BODY = ['campaign', 'expect', 'req', 'domain', 'dry', 'deleteSite', 'to', 'off', 'role', 'active', 'status', 'name', 'plan'];
 const targetOf = (path) => { const m = /\/churches\/([^/]+)/.exec(path) || /\/users\/(\d+)/.exec(path) || /\/directory\/(\d+)/.exec(path); return m ? decodeURIComponent(m[1]) : ''; };
 
-export async function createPortal({ db, sessionHours = 12, apiToken = '', bootstrapPassword = '', secureCookie = true, requireTwoFactor = true, encryptionKey = '', hooks = {} }) {
-	const auth = createAuth(db, { sessionHours, requireTwoFactor, encryptionKey }), audit = createAudit(db), dir = createDirectory(db);
+export async function createPortal({ db, sessionHours = 12, apiToken = '', bootstrapPassword = '', secureCookie = true, requireTwoFactor = true, encryptionKey = '', previousKeys = [], hooks = {} }) {
+	const auth = createAuth(db, { sessionHours, requireTwoFactor, encryptionKey, previousKeys }), audit = createAudit(db), dir = createDirectory(db);
 	const clientIp = (req) => req.ip || req.socket?.remoteAddress || '';
 	const apiUser = { id: null, email: 'api-token', name: 'API token', role: 'staff' };
 	const setCookie = (req, res, token) => res.cookie(COOKIE, token, { httpOnly: true, sameSite: 'strict', secure: !!req.secure && secureCookie, maxAge: sessionHours * 3600 * 1000, path: '/' });
