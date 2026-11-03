@@ -21,7 +21,7 @@ export function compactForModel(v, depth = 0) {
 	return out;
 }
 
-export function buildTools({ store, clients, dir, outreach, audit, hosted, whmcs, analytics }) {
+export function buildTools({ store, clients, dir, outreach, audit, hosted, whmcs, analytics, getSupport = () => null }) {
 	const ctxFor = () => ({ c: clients, configured: configured(clients.cfg), memo: {}, facts: null, secret: null });
 	const need = (id) => { const c = store.get(id); if (!c) throw new Error(`No customer with id "${id}". Use list_customers to see the ids.`); return c; };
 	const stageSummary = (ch, s, results) => ({ stage: s.key, title: s.title, tasks: reqsFor(s, ch).map((q) => ({ id: q.id, task: q.label, state: results?.[q.id]?.state || 'not checked', detail: trim(results?.[q.id]?.detail, 240) })) });
@@ -103,6 +103,12 @@ export function buildTools({ store, clients, dir, outreach, audit, hosted, whmcs
 			input_schema: { type: 'object', properties: { source: { type: 'string', enum: ['ga4', 'cloudflare', 'postmark', 'outreach', 'directory', 'activity', 'pipeline', 'footprint', 'billing'] }, days: { type: 'integer', enum: RANGES } }, required: ['source'] },
 			run: async ({ source, days }) => { const r = await analytics.report(days || 30), x = r.sources[source]; if (!x) throw new Error('Unknown source.'); if (!x.ok) return { source, error: x.error, not_set_up: !!x.notSetUp }; return { source, days: r.days, as_of: x.at, ...(x.stale ? { warning: 'The latest refresh failed; these are the last good numbers: ' + x.staleError } : {}), data: compactForModel(x.data) }; },
 		}] : []),
+		{
+			name: 'support_queue', kind: 'read',
+			description: 'The support tickets the assistant has sorted (from WHMCS), most urgent first: category, priority (1 urgent to 4 low), a one-line summary, why a person is needed, and the state (escalated, triaged, replied, spam_closed, digested...). state: open (default), escalated, replied, spam_closed, digested, all. Returns at most 25. You cannot reply to or close tickets from chat: point the person to the Support screen.',
+			input_schema: { type: 'object', properties: { state: { type: 'string' }, category: { type: 'string' }, q: { type: 'string' } } },
+			run: async (i) => { const sp = getSupport(); if (!sp) return { error: 'Support is not set up on this server.' }; const [r, st] = [await sp.list({ state: i.state || 'open', category: i.category, q: i.q, limit: 25 }), await sp.status()]; return { mode: st.settings.mode, last_run: st.last && { at: st.last.at, ok: st.last.ok, errors: st.last.errors }, counts: st.counts, total_matching: r.total, tickets: r.rows.map((t) => ({ ticket: t.tid || t.id, subject: String(t.subject).slice(0, 100), from: t.sender, category: t.category, priority: t.priority, state: t.state, summary: t.summary, needs_person_because: t.reason, has_draft: !!t.draft })) }; },
+		},
 		{
 			name: 'recent_activity', kind: 'read', admin: true,
 			description: 'ADMIN ONLY. The most recent actions in the portal (who did what, when, and whether it worked), newest first. Optionally filter by a person\'s email or a word in the action or target. Returns at most 30.',

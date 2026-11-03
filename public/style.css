@@ -152,3 +152,5 @@ button.pros { border: 1px solid #cfd4da; background: #fff; border-radius: 6px; p
 th[data-sort] { cursor: pointer; user-select: none; } th[data-sort]:hover { color: var(--p); }
 details.sect { margin: 14px 0; } details.sect > summary { cursor: pointer; font-weight: 700; font-size: 17px; padding: 6px 0; list-style: none; } details.sect > summary::before { content: '▾'; display: inline-block; width: 1.2em; color: var(--p); } details.sect:not([open]) > summary::before { content: '▸'; }
 details.sect > summary::-webkit-details-marker { display: none; } .res details.sect > summary { font-size: 14px; font-weight: 600; color: #8a1c1c; }
+.pri { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; font-weight: 700; background: #eef0f3; } .pri.p1 { background: #fde2e1; color: #a1211b; } .pri.p2 { background: #fdebd2; color: #8a5200; } .pri.p3 { background: #e8f0fe; color: #1b4aa1; } .pri.p4 { background: #eef0f3; color: #555; }
+tr.tk:hover { background: #faf5fb; } tr.dt td { background: #fcfafd; }
