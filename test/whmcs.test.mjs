@@ -134,3 +134,25 @@ test('sync with no credentials says what to set instead of failing quietly', asy
 	const db = await fresh(), w = createWhmcs({ db, whmcs: makeWhmcsClient({}), log: () => {} });
 	assert.equal((await w.status()).configured, false); const r = await w.sync(); assert.equal(r.ok, false); assert.match(r.error, /WHMCS_URL/);
 });
+
+test('a record WHMCS cannot encode (Malformed UTF-8) is skipped and named, and everything else is still read', async () => {
+	const rows = Array.from({ length: 7 }, (_, i) => ({ id: i + 1, firstname: 'C' + (i + 1), lastname: '', companyname: '', email: '', status: 'Active' })), BAD = new Set([2, 5]); // the 3rd and 6th customers have broken text
+	let calls = 0;
+	const f = async (url, o) => {
+		const p = new URLSearchParams(o.body), start = +p.get('limitstart'), size = +p.get('limitnum'), ok = (x) => ({ ok: true, status: 200, text: async () => JSON.stringify({ result: 'success', ...x }) }); calls++;
+		if (p.get('action') !== 'GetClients') return ok(p.get('action') === 'GetPaymentMethods' ? { paymentmethods: { paymentmethod: [] } } : { totalresults: 0, products: { product: [] }, invoices: { invoice: [] } });
+		if ([...BAD].some((i) => i >= start && i < start + size)) return { ok: true, status: 200, text: async () => JSON.stringify({ result: 'error', message: 'Error generating JSON encoded response: Malformed UTF-8 characters, possibly incorrectly encoded' }) };
+		return ok({ totalresults: rows.length, clients: { client: rows.slice(start, start + size) } });
+	};
+	const w = makeWhmcsClient({ url: 'https://my.example.ca', identifier: 'id1', secret: SECRET, fetchImpl: f });
+	const snap = await readSnapshot(w, { now: NOW });
+	assert.deepEqual(snap.clients.map((c) => c.id), [1, 2, 4, 5, 7], 'the 3rd and 6th customers are left out, all others are kept');
+	assert.deepEqual(snap.skipped.map((x) => [x.what, x.afterId]), [['customer', 2], ['customer', 5]], 'each skipped record is described by the ID before it');
+	assert.ok(calls < 60, 'found by halving the page, not by asking one record at a time');
+	// any other WHMCS error still stops the sync
+	const other = makeWhmcsClient({ url: 'https://my.example.ca', identifier: 'id1', secret: SECRET, fetchImpl: async () => ({ ok: true, status: 200, text: async () => JSON.stringify({ result: 'error', message: 'Access Denied' }) }) });
+	await assert.rejects(() => other.all('GetClients', 'clients', 'client'), /missing a permission/);
+	// and the stored result tells the person
+	const db = await fresh(), st = createWhmcs({ db, whmcs: w, log: () => {} }), res = await st.sync();
+	assert.equal(res.ok, true); assert.equal(res.skipped.length, 2); assert.equal((await st.status()).last.skipped[0].afterId, 2);
+});

@@ -45,16 +45,28 @@ export function makeWhmcsClient({ url, identifier, secret, accessKey = '', fetch
 			if (j.result === 'error') throw new Error(friendly(j.message));
 			return j;
 		},
-		/** Every row of a list action, page by page. */
-		async all(action, listKey, itemKey, params = {}, { pageSize = 250, maxPages = 400 } = {}) {
-			const out = [];
-			for (let page = 0; page < maxPages; page++) {
-				const j = await self.call(action, { ...params, limitstart: out.length, limitnum: pageSize }); // continue from what we actually received, in case WHMCS returns fewer rows per page than asked
+		/** Every row of a list action, page by page. WHMCS cannot return a page if one record has text it cannot encode ("Malformed UTF-8"):
+		 *  then the page is split in halves until the bad record is alone, that one is skipped and noted in options.skipped, and the rest is read. */
+		async all(action, listKey, itemKey, params = {}, { pageSize = 250, maxPages = 400, skipped = [], label = action } = {}) {
+			const BAD = /malformed utf-?8|json encoded response/i;
+			const read = async (start, size, prev = null) => {
+				let j;
+				try { j = await self.call(action, { ...params, limitstart: start, limitnum: size }); }
+				catch (e) {
+					if (!BAD.test(e.message)) throw e;
+					if (size <= 1) return { rows: [], skips: [{ what: label, offset: start, afterId: prev }], total: undefined };
+					const half = Math.ceil(size / 2), a = await read(start, half, prev), b = await read(start + a.rows.length + a.skips.length, size - half, a.rows.length ? a.rows.at(-1).id : prev);
+					return { rows: [...a.rows, ...b.rows], skips: [...a.skips, ...b.skips], total: a.total ?? b.total };
+				}
 				const box = j[listKey], items = Array.isArray(box) ? box : box?.[itemKey] ?? [];
-				const rows = Array.isArray(items) ? items : [items];
-				out.push(...rows);
-				const total = Number(j.totalresults);
-				if (!rows.length || (total ? out.length >= total : rows.length < pageSize)) break;
+				return { rows: Array.isArray(items) ? items : [items], skips: [], total: Number(j.totalresults) || undefined };
+			};
+			const out = []; let start = 0, total;
+			for (let page = 0; page < maxPages; page++) {
+				const g = await read(start, pageSize, out.at(-1)?.id ?? null); total ??= g.total;
+				skipped.push(...g.skips);
+				out.push(...g.rows); const covered = g.rows.length + g.skips.length; start += covered;
+				if (!covered || (total ? start >= total : g.rows.length < pageSize)) break;
 			}
 			return out;
 		},
@@ -71,10 +83,11 @@ export async function readSnapshot(whmcs, { now = new Date() } = {}) {
 	const gw = await whmcs.call('GetPaymentMethods');
 	const gwBox = gw.paymentmethods?.paymentmethod ?? gw.paymentmethods ?? [];
 	const gateways = (Array.isArray(gwBox) ? gwBox : [gwBox]).filter((g) => g && g.module).map((g) => ({ module: str(g.module, 60), name: str(g.displayname || g.module, 80) }));
-	const [clients, services, invoices] = await Promise.all([whmcs.all('GetClients', 'clients', 'client'), whmcs.all('GetClientsProducts', 'products', 'product'), whmcs.all('GetInvoices', 'invoices', 'invoice')]);
+	const skipped = [];
+	const [clients, services, invoices] = await Promise.all([whmcs.all('GetClients', 'clients', 'client', {}, { skipped, label: 'customer' }), whmcs.all('GetClientsProducts', 'products', 'product', {}, { skipped, label: 'service' }), whmcs.all('GetInvoices', 'invoices', 'invoice', {}, { skipped, label: 'invoice' })]);
 	const cutoff = new Date(now.getTime() - 800 * 86400000).toISOString().slice(0, 10); // about 26 months: enough for "last 12 months" and a year before
 	return {
-		at: now.toISOString(),
+		at: now.toISOString(), skipped,
 		gateways,
 		clients: clients.map((c) => ({ id: Number(c.id), name: str(`${c.firstname || ''} ${c.lastname || ''}`.trim(), 120), company: str(c.companyname, 120), email: str(c.email, 120), status: str(c.status, 20) })),
 		services: services.map((s) => ({ id: Number(s.id), clientid: Number(s.clientid), product: str(s.name || s.productname, 120), group: str(s.groupname, 80), status: str(s.status, 20), cycle: str(s.billingcycle, 30), next: day(s.nextduedate), amount: num(s.recurringamount ?? s.amount), module: str(s.paymentmethod, 60), domain: str(s.domain, 120) })),
@@ -159,7 +172,7 @@ export function createWhmcs({ db, whmcs, log = console.log }) {
 			try {
 				const snap = await readSnapshot(whmcs);
 				await put('whmcs_snapshot', snap);
-				const res = { ok: true, at, clients: snap.clients.length, services: snap.services.length, invoices: snap.invoices.length };
+				const res = { ok: true, at, clients: snap.clients.length, services: snap.services.length, invoices: snap.invoices.length, skipped: snap.skipped || [] };
 				await put('whmcs_sync', res); return res;
 			} catch (e) { const res = { ok: false, at, error: String(e.message).slice(0, 400) }; await put('whmcs_sync', res); log('whmcs sync failed: ' + res.error); return res; }
 			finally { running = false; }
