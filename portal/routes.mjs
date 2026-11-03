@@ -18,11 +18,11 @@ const LABELS = [
 	[/^POST \/api\/email\/create$/, 'email.create'], [/^POST \/api\/email\/postmark$/, 'email.postmark'], [/^POST \/api\/email\/health$/, 'email.check'], [/^POST \/api\/email\/test$/, 'email.test'],
 	[/^POST \/api\/directory\/import$/, 'directory.import'], [/^PATCH \/api\/directory\/\d+$/, 'directory.outreach'], [/^POST \/api\/directory\/customers$/, 'directory.customers.add'], [/^DELETE \/api\/directory\/customers$/, 'directory.customers.clear'],
 	[/^POST \/api\/outreach\/preview$/, 'outreach.preview'], [/^POST \/api\/outreach\/send$/, 'outreach.send'], [/^POST \/api\/outreach\/suppress$/, 'outreach.suppress'],
-	[/^POST \/api\/hosted\/sync$/, 'domains.sync'], [/^POST \/api\/hosted\/board-import$/, 'customer.import'],
+	[/^POST \/api\/hosted\/sync$/, 'domains.sync'], [/^POST \/api\/whmcs\/sync$/, 'whmcs.sync'], [/^POST \/api\/whmcs\/gateway-map$/, 'whmcs.map'], [/^POST \/api\/hosted\/board-import$/, 'customer.import'],
 	[/^POST \/api\/users$/, 'user.create'], [/^PATCH \/api\/users\/\d+$/, 'user.edit'], [/^POST \/api\/users\/\d+\/reset$/, 'user.reset-password'], [/^POST \/api\/users\/\d+\/reset-2fa$/, 'user.reset-2fa'], [/^POST \/api\/account\/2fa\/recovery$/, 'account.recovery-codes'], [/^POST \/api\/account\/password$/, 'account.password'],
 	[/^(POST|DELETE) \/api\/jobs/, 'export.job'], [/^POST \/api\/batch$/, 'export.batch'],
 ];
-const SAFE_BODY = ['campaign', 'expect', 'req', 'domain', 'dry', 'deleteSite', 'to', 'off', 'role', 'active', 'status', 'name', 'plan'];
+const SAFE_BODY = ['campaign', 'expect', 'req', 'domain', 'dry', 'deleteSite', 'to', 'off', 'role', 'active', 'status', 'name', 'plan', 'module', 'category'];
 const targetOf = (path) => { const m = /\/churches\/([^/]+)/.exec(path) || /\/users\/(\d+)/.exec(path) || /\/directory\/(\d+)/.exec(path); return m ? decodeURIComponent(m[1]) : ''; };
 
 export async function createPortal({ db, sessionHours = 12, apiToken = '', bootstrapPassword = '', secureCookie = true, requireTwoFactor = true, encryptionKey = '', previousKeys = [], hooks = {} }) {
