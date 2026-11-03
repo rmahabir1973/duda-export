@@ -338,7 +338,9 @@ if (!portal) app.post('/logout', (req, res) => {
 });
 
 const deployClients = makeClients(configFromEnv(env));
-const deployStore = createStore(path.join(DATA_DIR, 'deploy'));
+const deployStore = createStore(path.join(DATA_DIR, 'deploy'), { db: portalDb });
+const boardInit = await deployStore.init();
+console.log(`customer board: ${boardInit.count} customers loaded (${boardInit.source})`);
 app.use('/api/deploy', createDeployRouter({ need, store: deployStore, clients: deployClients }));
 app.use('/api/email', createEmailRouter({ need, clients: deployClients }));
 const hosted = portal && portalDb ? createHosted({ db: portalDb, clients: deployClients, duda: makeDudaMcp({ token: (env.DUDA_MCP_TOKEN || '').trim() }), dir: portal.dir, ownDomains: (env.OWN_DOMAINS || 'churchwebglobal.com,churchwebsupport.com').split(',').map((x) => x.trim()).filter(Boolean), previewDomain: deployClients.cfg.previewDomain }) : null;

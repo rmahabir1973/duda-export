@@ -250,3 +250,31 @@ test('assistant: a history containing thinking blocks or an orphaned tool call i
 	const out = await b.chat(user, [{ role: 'user', content: 'hi' }]);
 	assert.deepEqual(out.messages.at(-1).content, [{ type: 'text', text: 'Answer.' }], 'what the model returns is cleaned before it is saved in the chat');
 });
+
+/* ---------------------------------------------------------------- the customer board survives a redeploy */
+test('customer board: saved to the database, so a wiped data folder loses nothing; the first run copies the old file into it', async () => {
+	const db = await fresh();
+	const dirA = fs.mkdtempSync(path.join(os.tmpdir(), 'cb-'));
+	// before the database existed: customers only in the file
+	const old = createStore(dirA); old.create({ name: 'Old Church' });
+	const a = createStore(dirA, { db }); assert.deepEqual(await a.init(), { source: 'seeded from file', count: 1 });
+	a.create({ name: 'New Church', kind: 'migration' }); a.log('new-church', 'chad', 'Checked domain'); await a.flush();
+	// redeploy: a brand-new, empty data folder
+	const b = createStore(fs.mkdtempSync(path.join(os.tmpdir(), 'cb-')), { db }); const info = await b.init();
+	assert.equal(info.source, 'database'); assert.equal(info.count, 2);
+	assert.deepEqual(b.list().map((c) => c.name).sort(), ['New Church', 'Old Church']); assert.equal(b.get('new-church').kind, 'migration'); assert.equal(b.get('new-church').log[0].text, 'Checked domain');
+	b.remove('old-church'); await b.flush();
+	const c = createStore(fs.mkdtempSync(path.join(os.tmpdir(), 'cb-')), { db }); await c.init(); assert.deepEqual(c.list().map((x) => x.id), ['new-church'], 'a delete is saved too');
+	// the database wins over a stale file
+	const d = createStore(dirA, { db }); await d.init(); assert.equal(d.get('old-church'), null);
+});
+
+test('customer board: an unwritable data folder does not stop it working when a database is present', async () => {
+	const db = await fresh(), errs = [];
+	const blocker = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cb-')), 'a-file'); fs.writeFileSync(blocker, 'x'); const bad = path.join(blocker, 'deploy'); // a folder cannot be made under a file
+	const s = createStore(bad, { db, log: (...a) => errs.push(a.join(' ')) }); await s.init();
+	s.create({ name: 'Grace United' }); await s.flush();
+	assert.equal(s.list().length, 1); assert.ok(errs.length <= 1);
+	const t = createStore(bad, { db }); await t.init(); assert.equal(t.get('grace-united').name, 'Grace United');
+	const plain = createStore(fs.mkdtempSync(path.join(os.tmpdir(), 'cb-'))); assert.deepEqual(await plain.init(), { source: 'file', count: 0 });
+});
