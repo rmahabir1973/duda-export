@@ -24,3 +24,16 @@ $('sync').onclick = async () => { $('err').textContent = ''; try { await api('/a
 $('gap').onchange = () => { offset = 0; load(); }; $('q').oninput = () => { clearTimeout(timer); timer = setTimeout(() => { offset = 0; load(); }, 250); };
 $('prev').onclick = () => { offset = Math.max(0, offset - PAGE); load(); }; $('next').onclick = () => { offset += PAGE; load(); };
 status().then(load).catch((e) => { $('err').textContent = e.message; });
+
+async function candidates() {
+	try {
+		const c = await api('/api/hosted/board-candidates'); $('cand').hidden = !c.length; if (!c.length) return;
+		$('candRows').innerHTML = c.map((x) => `<label style="display:block;margin:4px 0"><input type="checkbox" data-slug="${esc(x.slug)}" checked> <b>${esc(x.name)}</b> <span class="hint">${esc(x.host)}${x.domain ? ' · ' + esc(x.domain) : ' · no real domain found'} · ${x.kind === 'migration' ? 'from DUDA' : 'new site'}</span></label>`).join('');
+	} catch { $('cand').hidden = true; }
+}
+$('candAll').onclick = () => { for (const b of document.querySelectorAll('#candRows input')) b.checked = true; };
+$('candAdd').onclick = async () => {
+	const slugs = [...document.querySelectorAll('#candRows input:checked')].map((b) => b.dataset.slug); $('candMsg').textContent = '';
+	try { const r = await api('/api/hosted/board-import', { method: 'POST', body: JSON.stringify({ slugs }) }); $('candMsg').textContent = `Added ${r.created.length} to the Customers board.${r.skipped.length ? ' Skipped ' + r.skipped.length + '.' : ''}`; await candidates(); } catch (e) { $('candMsg').textContent = e.message; }
+};
+candidates();

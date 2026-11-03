@@ -200,3 +200,6 @@ Needs in Railway: `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` (the churches
 
 ### Where the data lives
 Everything that matters is in Neon: accounts, sessions, the activity log, the directory, outreach, hosted domains, and (since v7.2) **the Customers board**, saved as one record in the `kv` table on every change. The data folder (`DATA_DIR`) now only holds export job files (large ZIPs), which are disposable. On first start after upgrading, the board is copied from the old file into Neon if Neon has none yet; after that Neon is the source of truth and a redeploy cannot lose customers. To recover customers from before this change, set `DATA_DIR=/data` (the Railway volume) for one deploy so the old `deploy/churches.json` is found and copied in.
+
+### Rebuilding the Customers board from Hostinger
+If customers are missing from the board (for example after a redeploy wiped the old file), open **Domains**: any site on Hostinger named `slug.churchwebglobal.com` that is not on the board is listed, with the real domain parked on it and a guess at the type (from DUDA if that domain is also a DUDA site). Tick them and press "Add". Then open each customer and press "Check everything" to bring its tasks up to date.
