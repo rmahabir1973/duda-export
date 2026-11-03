@@ -78,7 +78,11 @@ export function createSupport({ db, reader, writer = null, ai, mail = null, env 
 	const portalUrl = () => String(env.PORTAL_URL || 'https://portal.churchwebglobal.com').replace(/\/$/, '');
 
 	const self = {
-		configured: () => ({ read: reader.available(), write: canWrite(), ai: ai.available(), mail: !!mail }),
+		configured: () => ({
+			read: reader.available(), write: canWrite(), ai: ai.available(), mail: !!mail,
+			/** Names (never values) of what is still missing for answering tickets, so the screen can say exactly what to add in Railway. */
+			writeMissing: [...(writer ? writer.missing().map((m) => ({ url: 'WHMCS_URL', id: 'WHMCS_SUPPORT_API_ID', secret: 'WHMCS_SUPPORT_API_SECRET' }[m])) : ['WHMCS_SUPPORT_API_ID', 'WHMCS_SUPPORT_API_SECRET']), ...(env.SUPPORT_ADMIN_USERNAME ? [] : ['SUPPORT_ADMIN_USERNAME'])],
+		}),
 		async settings() { const s = (await kvGet('support_settings')) || {}; return { ...DEFAULT_SETTINGS, notify: envNotify(), ...s }; },
 		async saveSettings(input, by = '') {
 			const cur = await self.settings(), next = { ...cur };

@@ -34,6 +34,8 @@ export function makeWhmcsClient({ url, identifier, secret, accessKey = '', fetch
 	const local = host === 'localhost' || host === '127.0.0.1';
 	const self = {
 		available: () => !!(base && identifier && secret),
+		/** Which of the three settings are empty (never their values). */
+		missing: () => [!base && 'url', !identifier && 'id', !secret && 'secret'].filter(Boolean),
 		async call(action, params = {}) {
 			if (!actions.has(action)) throw new Error(actions === READ_ACTIONS ? `The portal only reads from WHMCS; "${action}" is not allowed.` : `This WHMCS login may only use ${[...actions].join(', ')}; "${action}" is not allowed.`);
 			if (!self.available()) throw new Error('WHMCS is not set up (WHMCS_URL, WHMCS_API_IDENTIFIER, WHMCS_API_SECRET).');
