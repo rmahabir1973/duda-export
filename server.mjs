@@ -23,6 +23,8 @@ import { createHosted, makeDudaMcp } from './portal/hosted.mjs';
 import { hostedRouter } from './portal/hostedRoutes.mjs';
 import { makeWhmcsClient, createWhmcs } from './portal/whmcs.mjs';
 import { whmcsRouter } from './portal/whmcsRoutes.mjs';
+import { createAnalytics, makeGa4 } from './portal/analytics.mjs';
+import { analyticsRouter } from './portal/analyticsRoutes.mjs';
 import { createAccessGuard } from './portal/access.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -357,6 +359,11 @@ if (whmcs) {
 	const wh = Number(env.WHMCS_SYNC_HOURS ?? 12);
 	if (wh > 0 && whmcs.available()) { const run = () => whmcs.sync().then((r) => console.log('whmcs sync:', r.ok ? `${r.clients} clients, ${r.services} services, ${r.invoices} invoices` : 'failed')).catch((e) => console.error('whmcs sync:', e.message)); setTimeout(run, 90000).unref(); setInterval(run, wh * 3600 * 1000).unref(); }
 }
+if (portal && portalDb) {
+	const ga4 = makeGa4({ propertyId: (env.GOOGLE_ANALYTICS_PROPERTY_ID || '').trim(), email: (env.GOOGLE_SERVICE_ACCOUNT_EMAIL || '').trim(), key: env.GOOGLE_SERVICE_ACCOUNT_KEY || '' });
+	const analytics = createAnalytics({ db: portalDb, clients: deployClients, ga4, store: deployStore, whmcs, hosted, ownDomains: (env.OWN_DOMAINS || 'churchwebglobal.com,churchwebsupport.com').split(',').map((x) => x.trim()).filter(Boolean) });
+	app.use('/api/analytics', analyticsRouter({ need, analytics }));
+}
 if (portal) {
 	const assistant = createAssistant({ tools: buildTools({ store: deployStore, clients: deployClients, dir: portal.dir, outreach, audit: portal.audit, hosted }), audit: portal.audit, clients: deployClients, env });
 	app.use('/api/assistant', assistantRouter({ need, assistant }));
@@ -368,6 +375,7 @@ app.get('/directory', page('directory.html', { dbOnly: true }));
 app.get('/activity', page('activity.html', { dbOnly: true }));
 app.get('/domains', page('domains.html', { dbOnly: true }));
 app.get('/whmcs', page('whmcs.html', { dbOnly: true }));
+app.get('/analytics', page('analytics.html', { dbOnly: true }));
 app.get('/users', page('users.html', { dbOnly: true }));
 app.get('/account', page('account.html', { dbOnly: true }));
 
