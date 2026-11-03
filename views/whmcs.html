@@ -7,14 +7,14 @@
 <ul class="res" id="src"></ul>
 <div id="body" hidden>
 <div class="statgrid" id="stats"></div>
-<h3>By payment kind</h3><p class="hint">"Mainly" counts each customer once, under the kind most of their active services use. "Any" counts a customer under every kind they use, so it adds up to more than the total. Invoice figures are the last 12 months.</p>
+<details class="sect" id="s-kinds" open><summary>By payment kind</summary><p class="hint">"Mainly" counts each customer once, under the kind most of their active services use. "Any" counts a customer under every kind they use, so it adds up to more than the total. Invoice figures are the last 12 months.</p>
 <div class="tablewrap"><table class="dirtable" style="min-width:0"><thead><tr><th>Payment kind</th><th>Customers (mainly)</th><th>Customers (any)</th><th>Active services</th><th>Annual recurring</th><th>Paid invoices</th><th>Average days to pay</th><th>Unpaid now</th><th>Overdue</th></tr></thead><tbody id="cats"></tbody></table></div>
-<h3 style="margin-top:22px">Payment gateways in WHMCS</h3><p class="hint">The portal guesses each gateway's kind from its name. If a guess is wrong (for example a cheque gateway with an unusual name), change it here; the numbers above update straight away.</p>
+</details><details class="sect" id="s-gws"><summary>Payment gateways in WHMCS (fix a wrong guess)</summary><p class="hint">The portal guesses each gateway's kind from its name. If a guess is wrong (for example a cheque gateway with an unusual name), change it here; the numbers above update straight away.</p>
 <div class="tablewrap"><table class="dirtable" style="min-width:0"><thead><tr><th>Gateway</th><th>Kind</th><th>Active services</th><th>Customers</th><th>Annual recurring</th></tr></thead><tbody id="gws"></tbody></table></div>
-<h3 style="margin-top:22px">Customers</h3>
+</details><details class="sect" id="s-cust" open><summary>Customers</summary><p class="hint">Click a column heading to sort by it; click again to reverse.</p>
 <div class="filterbar"><input id="q" type="search" placeholder="Search a name, company or email"><select id="cat"><option value="">All payment kinds</option></select><label class="hint"><input type="checkbox" id="any"> any service of this kind</label><a class="sm" id="csv" href="/api/whmcs/export.csv">Download CSV</a></div>
-<div class="tablewrap"><table class="dirtable" style="min-width:0"><thead><tr><th>Customer</th><th>Email</th><th>Status</th><th>Services</th><th>Pays mainly by</th><th>Annual recurring</th><th>Next due</th></tr></thead><tbody id="rows"></tbody></table></div>
+<div class="tablewrap"><table class="dirtable" style="min-width:0"><thead><tr id="custHead"><th data-sort="name">Customer</th><th data-sort="email">Email</th><th data-sort="status">Status</th><th data-sort="services">Services</th><th data-sort="kind">Pays mainly by</th><th data-sort="annual">Annual recurring</th><th data-sort="next">Next due</th></tr></thead><tbody id="rows"></tbody></table></div>
 <div class="pager"><button class="sm" id="prev">← Previous</button><span id="page"></span><button class="sm" id="next">Next →</button></div>
-</div>
+</details></div>
 <p class="err" id="err"></p></section></main>
 <script src="/assets/whmcs.js"></script></body></html>

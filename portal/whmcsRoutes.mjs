@@ -9,12 +9,12 @@ export function whmcsRouter({ need, whmcs, audit }) {
 	r.get('/status', async (req, res) => res.json(await whmcs.status()));
 	r.get('/summary', async (req, res) => res.json({ summary: await whmcs.summary(), labels: CATEGORIES }));
 	r.get('/customers', async (req, res) => {
-		const s = await whmcs.summary(); const rows = customerRows(s, { category: req.query.category, q: req.query.q, any: req.query.any === '1' });
+		const s = await whmcs.summary(); const rows = customerRows(s, { category: req.query.category, q: req.query.q, any: req.query.any === '1', sort: req.query.sort, dir: req.query.dir });
 		const lim = Math.min(500, Math.max(1, +req.query.limit || 100)), off = Math.max(0, +req.query.offset || 0);
 		res.json({ total: rows.length, rows: rows.slice(off, off + lim) });
 	});
 	r.get('/export.csv', async (req, res) => {
-		const rows = customerRows(await whmcs.summary(), { category: req.query.category, any: req.query.any === '1' });
+		const rows = customerRows(await whmcs.summary(), { category: req.query.category, any: req.query.any === '1', sort: req.query.sort, dir: req.query.dir });
 		await audit?.write({ user: req.user, action: 'whmcs.export', status: 200, detail: { category: req.query.category || 'all', rows: rows.length }, ip: req.ip || '' });
 		res.type('text/csv').set('content-disposition', 'attachment; filename="whmcs-customers.csv"').send(customersCsv(rows));
 	});

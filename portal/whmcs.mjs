@@ -78,6 +78,16 @@ const str = (v, n = 200) => String(v ?? '').slice(0, n);
 const num = (v) => { const x = parseFloat(v); return Number.isFinite(x) ? x : 0; };
 const day = (v) => { const s = str(v, 10); return /^\d{4}-\d{2}-\d{2}$/.test(s) && s !== '0000-00-00' ? s : ''; };
 
+/** Skipped records, grouped: "3 services between service ID 14 and 18". IDs are looked up from the rows that were read, so the person knows where in WHMCS to look. */
+export function groupSkips(skips, lists) {
+	const by = new Map();
+	for (const x of skips) {
+		const key = `${x.what}|${x.afterId}`, list = lists[x.what] || [], i = x.afterId == null ? -1 : list.findIndex((r) => String(r.id) === String(x.afterId));
+		const g = by.get(key) || { what: x.what, afterId: x.afterId, beforeId: list[i + 1]?.id ?? null, count: 0 }; g.count++; by.set(key, g);
+	}
+	return [...by.values()];
+}
+
 /** Reads what the planning needs from WHMCS and returns a compact snapshot (customers, services, invoices, gateways). */
 export async function readSnapshot(whmcs, { now = new Date() } = {}) {
 	const gw = await whmcs.call('GetPaymentMethods');
@@ -87,7 +97,7 @@ export async function readSnapshot(whmcs, { now = new Date() } = {}) {
 	const [clients, services, invoices] = await Promise.all([whmcs.all('GetClients', 'clients', 'client', {}, { skipped, label: 'customer' }), whmcs.all('GetClientsProducts', 'products', 'product', {}, { skipped, label: 'service' }), whmcs.all('GetInvoices', 'invoices', 'invoice', {}, { skipped, label: 'invoice' })]);
 	const cutoff = new Date(now.getTime() - 800 * 86400000).toISOString().slice(0, 10); // about 26 months: enough for "last 12 months" and a year before
 	return {
-		at: now.toISOString(), skipped,
+		at: now.toISOString(), skipped: groupSkips(skipped, { customer: clients, service: services, invoice: invoices }),
 		gateways,
 		clients: clients.map((c) => ({ id: Number(c.id), name: str(`${c.firstname || ''} ${c.lastname || ''}`.trim(), 120), company: str(c.companyname, 120), email: str(c.email, 120), status: str(c.status, 20) })),
 		services: services.map((s) => ({ id: Number(s.id), clientid: Number(s.clientid), product: str(s.name || s.productname, 120), group: str(s.groupname, 80), status: str(s.status, 20), cycle: str(s.billingcycle, 30), next: day(s.nextduedate), amount: num(s.recurringamount ?? s.amount), module: str(s.paymentmethod, 60), domain: str(s.domain, 120) })),
@@ -150,10 +160,19 @@ export function summarize(snap, overrides = {}, { now = new Date() } = {}) {
 	};
 }
 
-/** The customers list for the tab and the CSV: filter by payment kind (primary kind, or "any service of this kind") and search text. */
-export function customerRows(summary, { category = '', q = '', any = false } = {}) {
-	const needle = String(q || '').trim().toLowerCase();
-	return (summary?.clientRows || []).filter((r) => (!category || (any ? r.categories.includes(category) : r.primary === category)) && (!needle || [r.name, r.company, r.email].some((x) => String(x).toLowerCase().includes(needle)))).sort((a, b) => (a.company || a.name).localeCompare(b.company || b.name));
+/** Sort keys for the customer list (and aliases people or the assistant might use). Blank values always go last, in either direction. */
+const SORTS = { name: (r) => (r.company || r.name || '').toLowerCase(), email: (r) => String(r.email).toLowerCase(), status: (r) => String(r.status).toLowerCase(), services: (r) => r.services, kind: (r) => CATEGORIES[r.primary] || '', annual: (r) => Object.values(r.annual || {}).reduce((a, b) => a + b, 0), next: (r) => r.next || '' };
+const SORT_ALIAS = { company: 'name', customer: 'name', next_due: 'next', nextdue: 'next', due: 'next', amount: 'annual', annual_recurring: 'annual', recurring: 'annual', pays_by: 'kind', payment: 'kind', payment_kind: 'kind', category: 'kind' };
+export const SORT_KEYS = Object.keys(SORTS);
+/** The customers list for the tab, the CSV and the assistant: filter by payment kind (primary kind, or "any service of this kind") and search text, then sort.
+ *  Annual amounts in different currencies are compared as plain numbers, so sort by annual amount means "biggest number first". */
+export function customerRows(summary, { category = '', q = '', any = false, sort = 'name', dir = 'asc' } = {}) {
+	const needle = String(q || '').trim().toLowerCase(), key = SORTS[SORT_ALIAS[sort] || sort] ? SORT_ALIAS[sort] || sort : 'name', f = SORTS[key], sign = String(dir).toLowerCase() === 'desc' ? -1 : 1;
+	const blank = (v) => v === '' || v === null || v === undefined;
+	return (summary?.clientRows || []).filter((r) => (!category || (any ? r.categories.includes(category) : r.primary === category)) && (!needle || [r.name, r.company, r.email].some((x) => String(x).toLowerCase().includes(needle)))).sort((a, b) => {
+		const x = f(a), y = f(b); if (blank(x) !== blank(y)) return blank(x) ? 1 : -1;
+		const c = typeof x === 'number' ? x - y : String(x).localeCompare(String(y)); return (c * sign) || SORTS.name(a).localeCompare(SORTS.name(b));
+	});
 }
 const safeCell = (v) => { const t = String(v ?? ''); return /^[=+\-@\t\r]/.test(t) ? "'" + t : t; }; // a spreadsheet must never run a customer's name as a formula
 export const customersCsv = (rows) => ['WHMCS client ID,Name,Company,Email,Status,Active services,Pays mainly by,Other kinds,Annual recurring,Next due'].concat(rows.map((r) => csvLine([r.id, r.name, r.company, r.email, r.status, r.services, CATEGORIES[r.primary], r.categories.filter((c) => c !== r.primary).map((c) => CATEGORIES[c]).join('; '), Object.entries(r.annual).map(([c, v]) => `${v.toFixed(2)} ${c}`).join('; '), r.next].map(safeCell)))).join('\r\n') + '\r\n';

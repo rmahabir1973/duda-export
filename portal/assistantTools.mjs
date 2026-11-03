@@ -3,11 +3,25 @@ import { STAGES, stageByKey, reqOf, blockedBy, testStage, fixReq, reqsFor, stage
 import { configured, randomPassword } from '../deploy/clients.mjs';
 import { healthCheck } from '../deploy/email.mjs';
 import { normDomain, DOMAIN_RE } from '../deploy/store.mjs';
+import { customerRows, CATEGORIES, SORT_KEYS } from './whmcs.mjs';
+import { RANGES } from './analytics.mjs';
 
 const trim = (s, n = 400) => String(s ?? '').slice(0, n);
 const MAIL_RE = /^([a-z0-9][a-z0-9._-]{0,63})@((?:[a-z0-9-]+\.)+[a-z]{2,})$/;
 
-export function buildTools({ store, clients, dir, outreach, audit, hosted }) {
+/** Shrinks a report for the model: a long per-day list becomes its total and busiest day, long lists are cut. */
+export function compactForModel(v, depth = 0) {
+	if (Array.isArray(v)) return v.slice(0, 20).map((x) => compactForModel(x, depth + 1));
+	if (!v || typeof v !== 'object') return v;
+	const out = {};
+	for (const [k, x] of Object.entries(v)) {
+		if (k === 'daily' && Array.isArray(x)) { const keys = x[0] ? Object.keys(x[0]).filter((q) => typeof x[0][q] === 'number') : []; out.daily_summary = { days: x.length, from: x[0]?.d, to: x.at(-1)?.d, ...Object.fromEntries(keys.map((q) => [q, { total: Math.round(x.reduce((a, r) => a + r[q], 0) * 100) / 100, busiest_day: x.reduce((m, r) => (r[q] > m[q] ? r : m), x[0]).d }])) }; }
+		else out[k] = compactForModel(x, depth + 1);
+	}
+	return out;
+}
+
+export function buildTools({ store, clients, dir, outreach, audit, hosted, whmcs, analytics }) {
 	const ctxFor = () => ({ c: clients, configured: configured(clients.cfg), memo: {}, facts: null, secret: null });
 	const need = (id) => { const c = store.get(id); if (!c) throw new Error(`No customer with id "${id}". Use list_customers to see the ids.`); return c; };
 	const stageSummary = (ch, s, results) => ({ stage: s.key, title: s.title, tasks: reqsFor(s, ch).map((q) => ({ id: q.id, task: q.label, state: results?.[q.id]?.state || 'not checked', detail: trim(results?.[q.id]?.detail, 240) })) });
@@ -68,6 +82,33 @@ export function buildTools({ store, clients, dir, outreach, audit, hosted }) {
 			},
 		] : []),
 		{ name: 'outreach_stats', kind: 'read', description: 'Prospect email results for the last 30 days (sent, delivered, opened, clicked, bounced, unsubscribed) and today\'s sending allowance.', input_schema: { type: 'object', properties: {} }, run: async () => (outreach ? outreach.stats() : { error: 'Outreach is not set up.' }) },
+
+		...(whmcs ? [
+			{
+				name: 'whmcs_summary', kind: 'read', admin: true,
+				description: 'ADMIN ONLY. How customers pay in WHMCS (a read-only copy): customers and services by payment kind (card, cheque/mail-in, bank transfer, other), annual recurring per currency, paid/unpaid/overdue invoices, average days to pay, and the gateways. Says when WHMCS was last synced.',
+				input_schema: { type: 'object', properties: {} },
+				run: async () => { const s = await whmcs.summary(); if (!s) return { error: 'WHMCS has not been synced yet. Open the WHMCS screen and press Sync now (it needs WHMCS_URL, WHMCS_API_ID and WHMCS_API_SECRET in Railway).' }; const st = await whmcs.status(); return { synced_at: s.at, last_sync: st.last, totals: s.totals, by_payment_kind: s.categories.map((c) => ({ kind: c.label, customers_mainly: c.clients, customers_any_service: c.anyClients, active_services: c.services, annual_recurring: c.annual, paid_invoices_last_12_months: c.paid12m, average_days_to_pay: c.avgDaysToPay, unpaid_invoices: c.unpaid, overdue_invoices: c.overdue })), gateways: s.gateways.map((g) => ({ name: g.name, kind: CATEGORIES[g.category], active_services: g.services, customers: g.clients })) }; },
+			},
+			{
+				name: 'whmcs_customers', kind: 'read', admin: true,
+				description: 'ADMIN ONLY. Lists WHMCS customers (active services only), filtered and SORTED. Use this for any "list/sort/who pays by X/next due" question. sort: name, email, status, services, kind (payment kind), annual (annual recurring; amounts in different currencies are compared as plain numbers), next (next due date; blanks last). dir: asc or desc. Returns at most 50 per call; use offset to continue.',
+				input_schema: { type: 'object', properties: { category: { type: 'string', enum: Object.keys(CATEGORIES), description: 'Payment kind: card, cheque, bank, other, none' }, any_service: { type: 'boolean', description: 'true: customers with ANY service of that kind; false: customers who mainly pay that way' }, q: { type: 'string', description: 'Search name, company or email' }, sort: { type: 'string', enum: SORT_KEYS }, dir: { type: 'string', enum: ['asc', 'desc'] }, limit: { type: 'integer' }, offset: { type: 'integer' } } },
+				run: async (i) => { const sm = await whmcs.summary(); if (!sm) return { error: 'WHMCS has not been synced yet. Open the WHMCS screen and press Sync now.' }; const rows = customerRows(sm, { category: i.category, any: !!i.any_service, q: i.q, sort: i.sort || 'name', dir: i.dir || 'asc' }), lim = Math.min(50, Math.max(1, +i.limit || 25)), off = Math.max(0, +i.offset || 0); return { synced_at: sm.at, total_matching: rows.length, showing: `${Math.min(off + 1, rows.length)}-${Math.min(off + lim, rows.length)}`, sorted_by: `${i.sort || 'name'} ${i.dir || 'asc'}`, customers: rows.slice(off, off + lim).map((r) => ({ customer: r.company || r.name, contact: r.company ? r.name : '', email: r.email, status: r.status, active_services: r.services, pays_mainly_by: CATEGORIES[r.primary], other_kinds: r.categories.filter((c) => c !== r.primary).map((c) => CATEGORIES[c]), annual_recurring: r.annual, next_due: r.next })) }; },
+			},
+		] : []),
+		...(analytics ? [{
+			name: 'analytics_overview', kind: 'read', admin: true,
+			description: 'ADMIN ONLY. The numbers behind the Analytics screen. source: ga4 (churchwebglobal.com website visitors, pages, sources, countries), cloudflare (traffic to every customer domain), postmark (email sending), outreach (prospect emails), directory, activity (portal actions), pipeline (customers by setup stage), footprint (domains hosted), billing (WHMCS summary). days: 7, 30 or 90. Daily series are summarised. A source that is not set up says which setting is missing: pass that on.',
+			input_schema: { type: 'object', properties: { source: { type: 'string', enum: ['ga4', 'cloudflare', 'postmark', 'outreach', 'directory', 'activity', 'pipeline', 'footprint', 'billing'] }, days: { type: 'integer', enum: RANGES } }, required: ['source'] },
+			run: async ({ source, days }) => { const r = await analytics.report(days || 30), x = r.sources[source]; if (!x) throw new Error('Unknown source.'); if (!x.ok) return { source, error: x.error, not_set_up: !!x.notSetUp }; return { source, days: r.days, as_of: x.at, ...(x.stale ? { warning: 'The latest refresh failed; these are the last good numbers: ' + x.staleError } : {}), data: compactForModel(x.data) }; },
+		}] : []),
+		{
+			name: 'recent_activity', kind: 'read', admin: true,
+			description: 'ADMIN ONLY. The most recent actions in the portal (who did what, when, and whether it worked), newest first. Optionally filter by a person\'s email or a word in the action or target. Returns at most 30.',
+			input_schema: { type: 'object', properties: { user: { type: 'string', description: 'Exact email address' }, q: { type: 'string' }, limit: { type: 'integer' } } },
+			run: async ({ user, q, limit }) => { const r = await audit.list({ user, q, limit: Math.min(30, Math.max(1, +limit || 15)) }); return { total_matching: r.total, actions: r.rows.map((x) => ({ at: x.at, who: x.user_email, action: x.action, target: x.target, result: x.status && x.status >= 400 ? 'failed' : 'ok' })) }; },
+		},
 
 		/* ---------------- changes: only after a person approves */
 		{
