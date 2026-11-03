@@ -6,6 +6,7 @@ const AUTO_REPLY_OK = new Set(['site_issue', 'email_issue', 'domain', 'sales']);
 const NOREPLY = /(^|[._-])(no-?reply|donotreply|do-not-reply|mailer-daemon|postmaster|bounces?)([._-]|@)/i;
 const OPEN_STATES = ['new', 'triaged', 'escalated', 'failed'];
 const DONE = new Set(['replied', 'closed', 'digested', 'escalated']);
+const MAX_MAILS_PER_RUN = 8; // a backlog must never flood the inbox: past this, escalations wait in the queue and the daily summary
 
 export const DEFAULT_KB = `Write the facts the support assistant may use to answer customers, one per line. It answers ONLY from this text: if a question is not covered here, the ticket goes to a person instead.
 Examples of what to add (replace with your real answers):
@@ -24,7 +25,7 @@ Answer with ONE JSON object and nothing else:
  "needs_human": true if a person should handle it,
  "reason": why it needs a person (or empty),
  "confidence": 0 to 1, how sure you are of the category,
- "has_deadline": true if it is a registrar or domain notice that needs action or has a deadline (expiry, failed verification, transfer, suspension),
+ "has_deadline": true ONLY if a person must act or something will be lost: contact or WHOIS verification required, a domain expiring or expired that is NOT already set to auto-renew, a transfer away or authorisation (EPP) request, a suspension, or a failed payment. Routine automatic messages are NOT deadlines, so set false: "autorenew order pending processing", renewal receipts, order completed, order status updates, "to be sent before" dates on an order that is already being processed,
  "sentiment": negative|neutral|positive,
  "asks_for_human": true if the sender asks to speak to a person,
  "reply": a short, kind reply to the sender ONLY if the knowledge below fully answers the question, otherwise "",
@@ -123,7 +124,7 @@ export function createSupport({ db, reader, writer = null, ai, mail = null, env 
 		},
 
 		/** Carries out the decision, within the limits: only in automatic mode, only for recent tickets, never beyond the hourly cap. Escalation emails also go out in draft mode. */
-		async execute(id, cfg) {
+		async execute(id, cfg, ctx = { mails: 0 }) {
 			const row = (await db.query('select * from support_tickets where id = $1', [id]))[0]; if (!row || row.state !== 'triaged') return 'skipped';
 			const a = row.action, auto = cfg.mode === 'auto' && canWrite(), recent = row.last_by_customer && row.last_reply && now() - new Date(row.last_reply).getTime() <= cfg.windowHours * 3600000;
 			const used = Number((await db.query("select count(*)::int as n from support_log where action in ('auto_reply','auto_close') and at > now() - interval '1 hour'"))[0].n);
@@ -137,12 +138,12 @@ export function createSupport({ db, reader, writer = null, ai, mail = null, env 
 				if (a === 'close_spam' || a === 'close_thanks') { if (!may) { await set(id, { state: 'triaged' }); return 'waiting'; } await writer.call('UpdateTicket', { ticketid: id, status: 'Closed' }); await note(id, 'auto_close', 'ai', a); await finish(a === 'close_spam' ? 'spam_closed' : 'closed'); return 'closed'; }
 				if (a === 'reply') {
 					const sent = Number((await db.query("select count(*)::int as n from support_log where ticket_id = $1 and action = 'auto_reply'", [id]))[0].n);
-					if (sent >= 2) { await set(id, { state: 'triaged', action: 'escalate', reason: 'The assistant has already replied twice on this ticket.' }); return self.execute(id, cfg); }
+					if (sent >= 2) { await set(id, { state: 'triaged', action: 'escalate', reason: 'The assistant has already replied twice on this ticket.' }); return self.execute(id, cfg, ctx); }
 					if (!may) { await set(id, { state: 'triaged' }); return 'waiting'; }
 					await writer.call('AddTicketReply', { ticketid: id, message: `${row.draft}\n\n${cfg.signature}`, adminusername: env.SUPPORT_ADMIN_USERNAME, status: 'Answered' });
 					await note(id, 'auto_reply', 'ai', row.kb_basis); await finish('replied'); return 'replied';
 				}
-				if (a === 'escalate') { await escalate(row, cfg, auto, 'ai'); return 'escalated'; }
+				if (a === 'escalate') { const mailIt = !!recent && ctx.mails < MAX_MAILS_PER_RUN; if (mailIt) ctx.mails++; await escalate(row, cfg, auto, 'ai', mailIt); return 'escalated'; }
 				await set(id, { state: 'triaged' }); return 'waiting';
 			} catch (e) { return fail(e); }
 		},
@@ -152,12 +153,12 @@ export function createSupport({ db, reader, writer = null, ai, mail = null, env 
 			if (running) return { skipped: 'A run is already in progress.' };
 			const cfg = await self.settings(); if (cfg.mode === 'off') return { skipped: 'Support is switched off.' };
 			if (!reader.available()) throw new Error('WHMCS is not set up (WHMCS_URL, WHMCS_API_ID, WHMCS_API_SECRET).');
-			running = true; const res = { at: new Date(now()).toISOString(), by, synced: 0, triaged: 0, acted: 0, errors: [] };
+			running = true; const ctx = { mails: 0 }, res = { at: new Date(now()).toISOString(), by, synced: 0, triaged: 0, acted: 0, errors: [] };
 			try {
 				res.synced = (await self.sync()).changed;
 				if (!ai.available()) res.errors.push('The AI is not set up (GATEWAY_ADMIN_KEY), so new tickets cannot be sorted.');
-				else for (const row of await db.query("select * from support_tickets where state = 'new' order by last_reply desc limit 25")) { try { await self.triage(row, cfg); res.triaged++; if (DONE.has(await self.execute(row.id, cfg))) res.acted++; } catch (e) { res.errors.push(`#${row.tid || row.id}: ${clip(e.message, 120)}`); log('support: ' + e.message); } }
-				if (cfg.mode === 'auto') for (const row of await db.query("select id from support_tickets where state = 'triaged' and action not in ('', 'queue') order by priority limit 50")) if (DONE.has(await self.execute(row.id, cfg))) res.acted++;
+				else for (const row of await db.query("select * from support_tickets where state = 'new' order by last_reply desc limit 25")) { try { await self.triage(row, cfg); res.triaged++; if (DONE.has(await self.execute(row.id, cfg, ctx))) res.acted++; } catch (e) { res.errors.push(`#${row.tid || row.id}: ${clip(e.message, 120)}`); log('support: ' + e.message); } }
+				if (cfg.mode === 'auto') for (const row of await db.query("select id from support_tickets where state = 'triaged' and action not in ('', 'queue') order by priority limit 50")) if (DONE.has(await self.execute(row.id, cfg, ctx))) res.acted++;
 				await self.maybeDigest(cfg).catch((e) => res.errors.push('Digest: ' + clip(e.message, 120)));
 			} catch (e) { res.errors.push(clip(e.message, 200)); } finally { running = false; }
 			res.ok = !res.errors.length; await kvPut('support_last_run', res); return res;
@@ -184,6 +185,7 @@ export function createSupport({ db, reader, writer = null, ai, mail = null, env 
 			if (row.state === 'spam_closed' && canWrite()) await writer.call('UpdateTicket', { ticketid: id, status: 'Open' });
 			await set(id, { state: 'escalated', category: 'other', needs_human: true, action: 'escalate', reason: `Marked "not spam" by ${by}.`, handled_by: by, handled_at: new Date().toISOString() }); await note(id, 'not_spam', by); return self.get(id);
 		},
+		async retriageOpen() { return (await db.query("update support_tickets set state = 'new', action = '', error = '', updated_at = now() where state in ('escalated', 'triaged') returning id")).length; },
 		async retriage(id) { await set(id, { state: 'new', action: '', error: '' }); return self.get(id); },
 
 		async list({ state = 'open', category = '', q = '', limit = 50, offset = 0 } = {}) {
@@ -210,9 +212,10 @@ export function createSupport({ db, reader, writer = null, ai, mail = null, env 
 			if (!force && (Number(g('hour')) < 8 || (await kvGet('support_digest_day')) === today)) return { sent: false };
 			const items = await db.query("select id, tid, subject, sender, summary from support_tickets where state = 'digested' and digest_at is null order by id"), c = await self.counts();
 			await kvPut('support_digest_day', today);
-			if (!items.length && !c.repliedByAi24h && !c.closedByAi24h) return { sent: false };
+			if (!items.length && !c.repliedByAi24h && !c.closedByAi24h && !c.needsAPerson) return { sent: false };
 			const to = cfg.notify; if (!mail || !to.length) return { sent: false, reason: 'No email address is set for escalations.' };
-			const text = [`Support summary for ${today}`, '', `Answered by the assistant in the last 24 hours: ${c.repliedByAi24h}`, `Closed by the assistant (spam, thanks, notices): ${c.closedByAi24h}`, `Needing a person now: ${c.needsAPerson}`, `Drafts waiting for approval: ${c.awaitingApproval}`, '', items.length ? 'Registrar notices skipped (no deadline or action needed):' : 'No registrar notices to report.', ...items.map((i) => `- #${i.tid || i.id} ${clip(i.sender, 60)}: ${clip(i.subject, 100)}${i.summary ? ' — ' + clip(i.summary, 160) : ''}`), '', `Open the queue: ${portalUrl()}/support`].join('\n');
+			const need = await db.query("select tid, id, subject, sender, priority, summary from support_tickets where state = 'escalated' order by priority, last_reply desc nulls last limit 15");
+			const text = [`Support summary for ${today}`, '', `Answered by the assistant in the last 24 hours: ${c.repliedByAi24h}`, `Closed by the assistant (spam, thanks, notices): ${c.closedByAi24h}`, `Needing a person now: ${c.needsAPerson}`, `Drafts waiting for approval: ${c.awaitingApproval}`, '', need.length ? 'Needing a person (most urgent first, up to 15):' : 'Nothing is waiting for a person.', ...need.map((n) => `- [P${n.priority}] #${n.tid || n.id} ${clip(n.sender, 50)}: ${clip(n.subject, 90)}${n.summary ? ' — ' + clip(n.summary, 140) : ''}`), '', items.length ? 'Registrar notices skipped (no deadline or action needed):' : 'No registrar notices to report.', ...items.map((i) => `- #${i.tid || i.id} ${clip(i.sender, 60)}: ${clip(i.subject, 100)}${i.summary ? ' — ' + clip(i.summary, 160) : ''}`), '', `Open the queue: ${portalUrl()}/support`].join('\n');
 			await mail.send({ to, subject: `Support summary: ${c.needsAPerson} need a person, ${items.length} registrar notice${items.length === 1 ? '' : 's'} skipped`, text });
 			if (items.length) await db.query('update support_tickets set digest_at = now() where id = any($1)', [items.map((i) => Number(i.id))]);
 			await note(null, 'digest', 'ai', `${items.length} notices`); return { sent: true, items: items.length };
@@ -220,17 +223,18 @@ export function createSupport({ db, reader, writer = null, ai, mail = null, env 
 	};
 
 	/** Emails the people in charge about a ticket (always, if an address is set) and, in automatic mode, raises its priority and flags it in WHMCS. Once per escalation. */
-	async function escalate(row, cfg, flag, who) {
+	async function escalate(row, cfg, flag, who, mailIt = true) {
 		const id = Number(row.id), P = ['', 'URGENT', 'High', 'Normal', 'Low'][row.priority] || 'Normal';
 		let mailed = false, err = '';
-		if (mail && cfg.notify.length) {
+		if (!mailIt) err = '';
+		else if (mail && cfg.notify.length) {
 			const text = [`Ticket #${row.tid || id} needs a person (priority: ${P}, ${LABELS[row.category] || 'Other'})`, '', `From: ${clip(row.sender_name, 80)} <${clip(row.sender, 120)}> (${Number(row.client_id) > 0 ? 'registered client' : 'not a registered client'})`, `Subject: ${clip(row.subject, 150)}`, '', `What they want: ${row.summary || '(see the ticket)'}`, `Why it needs a person: ${row.reason || 'n/a'}`, row.draft ? `\nSuggested reply (NOT sent):\n${row.draft}` : '', '', `Open it in the portal: ${portalUrl()}/support`].filter((x) => x !== undefined).join('\n');
 			try { await mail.send({ to: cfg.notify, subject: `[${P}] Support ticket #${row.tid || id}: ${clip(row.subject, 100)}`.replace(/[\r\n]+/g, ' '), text }); mailed = true; } catch (e) { err = 'Email failed: ' + clip(e.message, 150); }
 		} else err = 'No escalation email address is set, so nobody was emailed.';
 		let flagged = false;
 		if (flag && writer) { try { await writer.call('UpdateTicket', { ticketid: id, ...(row.priority <= 2 ? { priority: 'High' } : {}), ...(env.SUPPORT_FLAG_ADMIN_ID ? { flag: env.SUPPORT_FLAG_ADMIN_ID } : {}) }); flagged = true; } catch (e) { err = [err, 'Flagging in WHMCS failed: ' + clip(e.message, 150)].filter(Boolean).join(' '); } }
 		await set(id, { state: 'escalated', needs_human: true, handled_by: who, handled_at: new Date().toISOString(), error: err });
-		await note(id, 'escalate', who, `${mailed ? 'emailed' : 'not emailed'}${flagged ? ', flagged' : ''}${err ? ' (' + err + ')' : ''}`);
+		await note(id, 'escalate', who, `${mailed ? 'emailed' : mailIt ? 'not emailed' : 'not emailed one by one (older ticket or email limit; it is in the daily summary)'}${flagged ? ', flagged' : ''}${err ? ' (' + err + ')' : ''}`);
 	}
 	return self;
 }

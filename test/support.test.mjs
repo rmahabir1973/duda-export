@@ -167,3 +167,19 @@ test('support routes: staff can work tickets, only an admin changes settings, an
 	const q = buildTools({ store: { list: () => [], get: () => null }, clients: { cfg: {} }, dir: {}, outreach: null, audit: {}, hosted: null, getSupport: () => sup }).find((t) => t.name === 'support_queue'), r = await q.run({ state: 'escalated' });
 	assert.equal(r.total_matching, 6); assert.equal(r.tickets[0].priority <= r.tickets.at(-1).priority, true, 'most urgent first'); assert.ok(r.tickets.every((t) => t.needs_person_because));
 });
+
+test('a backlog cannot flood the inbox: old tickets and anything past the per-run limit are queued for the daily summary instead of emailed one by one', async () => {
+	const table = { 'Needs a person': J({ category: 'other', needs_human: true, reason: 'x', summary: 'Needs a person' }) };
+	const many = [...Array.from({ length: 12 }, (_, i) => T(100 + i, { subject: 'Needs a person ' + i, age: 1 })), ...Array.from({ length: 5 }, (_, i) => T(200 + i, { subject: 'Needs a person old ' + i, age: 300 }))];
+	const { db, sent, sup } = await setup({ mode: 'draft', tickets: many, table });
+	await sup.run(); const one = sent.filter((m) => /^\[/.test(m.subject));
+	assert.equal(one.length, 8, 'at most 8 individual emails in a run'); const s = await stateOf(db); assert.equal(Object.values(s).filter((x) => x === 'escalated').length, 17, 'all 17 are still escalated and in the queue');
+	const notMailed = await db.query("select count(*)::int as n from support_log where action = 'escalate' and detail like 'not emailed one by one%'"); assert.equal(Number(notMailed[0].n), 9, '4 over the limit and the 5 old ones');
+	const digest = sent.find((m) => /Support summary/.test(m.subject)); assert.ok(digest, 'the daily summary lists who needs a person'); assert.match(digest.text, /Needing a person \(most urgent first/); assert.match(digest.text, /Needing a person now: 17/);
+	assert.equal(await sup.retriageOpen(), 17); assert.equal((await db.query("select count(*)::int as n from support_tickets where state = 'new'"))[0].n, 17);
+});
+
+test('the triage instructions say routine autorenew notices are not deadlines', async () => {
+	const { ai, sup } = await setup({ tickets: [T(1, { subject: 'Win a free SEO audit', client: false })] }); await sup.run();
+	assert.match(ai.seen[0].system, /autorenew order pending processing/); assert.match(ai.seen[0].system, /NOT deadlines/); assert.match(ai.seen[0].system, /WHOIS verification required/);
+});
