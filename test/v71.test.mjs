@@ -278,3 +278,27 @@ test('customer board: an unwritable data folder does not stop it working when a 
 	const t = createStore(bad, { db }); await t.init(); assert.equal(t.get('grace-united').name, 'Grace United');
 	const plain = createStore(fs.mkdtempSync(path.join(os.tmpdir(), 'cb-'))); assert.deepEqual(await plain.init(), { source: 'file', count: 0 });
 });
+
+test('customer board: a first start with no old file must not block importing the old file on a later start', async () => {
+	const db = await fresh();
+	const first = createStore(fs.mkdtempSync(path.join(os.tmpdir(), 'cb-')), { db }); assert.deepEqual(await first.init(), { source: 'empty', count: 0 });
+	const oldDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cb-')); createStore(oldDir).create({ name: 'Recovered Church' });
+	const second = createStore(oldDir, { db }); assert.deepEqual(await second.init(), { source: 'seeded from file', count: 1 });
+	const third = createStore(fs.mkdtempSync(path.join(os.tmpdir(), 'cb-')), { db }); assert.deepEqual(await third.init(), { source: 'database', count: 1 });
+});
+
+/* ---------------------------------------------------------------- rebuilding the board from Hostinger */
+test('board recovery: Hostinger sites missing from the board are offered with their real domain and type, and added once', async () => {
+	const { hosted, db } = await hostedEnv();
+	const clients2 = { cloudflare: { available: () => false }, smartermail: { available: () => false }, hostinger: { available: () => true, websites: async () => [{ domain: 'grace-united.churchwebglobal.com', username: 'u1' }, { domain: 'erindale-united.churchwebglobal.com', username: 'u1' }, { domain: 'hope.churchwebglobal.com', username: 'u1' }, { domain: 'build2.churchwebglobal.com', username: 'u1' }, { domain: 'ab.churchwebglobal.com', username: 'u1' }, { domain: 'plain.example.org', username: 'u1' }], parkedDomains: async (u, site) => (site.startsWith('erindale') ? ['www.erindaleunited.church'] : site.startsWith('grace') ? ['graceunited.ca'] : []) } };
+	const { createHosted: mk } = await import('../portal/hosted.mjs');
+	const dir = createDirectory(db), h = mk({ db, clients: clients2, duda: fakeDuda([{ n: 'e1', pub: true, d: 'www.erindaleunited.church' }]), dir, log: () => {} });
+	await h.sync();
+	const store = createStore(fs.mkdtempSync(path.join(os.tmpdir(), 'bc-'))); store.create({ name: 'Hope', slug: 'hope' });
+	const c = await h.boardCandidates(store);
+	assert.deepEqual(c.map((x) => x.slug), ['erindale-united', 'grace-united'], 'build sites, the template, too-short names, other domains and customers already on the board are left out');
+	assert.deepEqual(c.map((x) => [x.name, x.domain, x.kind]), [['Erindale United', 'erindaleunited.church', 'migration'], ['Grace United', 'graceunited.ca', 'new']]);
+	const r = await h.boardImport(store, ['erindale-united', 'not-offered'], 'chad@x.ca');
+	assert.deepEqual(r.created.map((x) => x.slug), ['erindale-united']); assert.equal(store.get('erindale-united').kind, 'migration'); assert.equal(store.get('erindale-united').domain, 'erindaleunited.church');
+	assert.deepEqual((await h.boardCandidates(store)).map((x) => x.slug), ['grace-united'], 'added sites are no longer offered');
+});

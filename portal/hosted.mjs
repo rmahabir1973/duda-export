@@ -1,6 +1,7 @@
 // "What do we host?": pulls domain names from Cloudflare, DUDA, SmarterMail and Hostinger into one table, so the portal (and the assistant) can answer it.
 // Each source reports its own result; a source that fails never wipes what the others found.
 const DOMAIN_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
+import { SLUG_RE } from '../deploy/store.mjs';
 export const normHost = (d) => String(d || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/[/?#:].*$/, '').replace(/^www\./, '').replace(/\.$/, '');
 const apex = (d) => d; // Cloudflare zones and DUDA custom domains are already registrable names; subdomains stay as they are
 
@@ -122,6 +123,28 @@ export function createHosted({ db, clients, duda, dir, ownDomains = [], previewD
 			const lim = Math.min(500, Math.max(1, +limit || 200)), off = Math.max(0, +offset || 0);
 			const rows = await db.query(`select domain, in_cloudflare, cf_status, in_duda, duda_site, in_smartermail, in_hostinger, hostinger_site from hosted_domains ${sql} order by domain limit ${lim} offset ${off}`, p);
 			return { total, rows };
+		},
+		/** Sites we built on Hostinger (slug.<preview domain>) that are not on the Customers board, with the real domain parked on them when the sync knows it. */
+		async boardCandidates(store, { templateSlug = 'build2' } = {}) {
+			const suffix = '.' + previewDomain, by = new Map();
+			for (const r of await db.query('select domain, hostinger_site, in_duda from hosted_domains where in_hostinger')) {
+				const host = r.hostinger_site; if (!host || !host.endsWith(suffix)) continue;
+				const slug = host.slice(0, -suffix.length); if (slug.includes('.') || /^build\d*$/.test(slug) || slug === templateSlug) continue;
+				const e = by.get(slug) || { slug, host, domains: [], duda: false };
+				if (r.domain !== host) { e.domains.push(r.domain); if (r.in_duda) e.duda = true; }
+				by.set(slug, e);
+			}
+			const title = (s) => s.split('-').filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(' ');
+			return [...by.values()].filter((c) => SLUG_RE.test(c.slug) && !store.get(c.slug)).sort((a, b) => a.slug.localeCompare(b.slug)).map((c) => ({ ...c, name: title(c.slug), domain: c.domains.sort((a, b) => a.length - b.length)[0] || '', kind: c.duda ? 'migration' : 'new' }));
+		},
+		async boardImport(store, slugs, by = '') {
+			const want = new Set(slugs || []), created = [], skipped = [];
+			for (const c of (await self.boardCandidates(store)).filter((x) => want.has(x.slug))) {
+				const base = { name: c.name, slug: c.slug, kind: c.kind, notes: 'Added from the Hostinger site list. Check the name, the domain and the type under Customer details.' };
+				try { created.push(store.create({ ...base, domain: c.domain }, by)); }
+				catch (e) { try { created.push(store.create({ ...base, domain: '' }, by)); } catch (e2) { skipped.push({ slug: c.slug, error: e2.message }); } }
+			}
+			return { created: created.map((c) => ({ slug: c.slug, name: c.name, domain: c.domain, kind: c.kind })), skipped };
 		},
 		async counts() { const r = (await db.query("select count(*)::int as total, count(*) filter (where in_cloudflare)::int as cloudflare, count(*) filter (where in_duda)::int as duda, count(*) filter (where in_smartermail)::int as smartermail, count(*) filter (where in_hostinger)::int as hostinger from hosted_domains"))[0]; return r; },
 		/** Everything we know about one domain: where it is hosted, whether it is on the board, and its directory listing. */

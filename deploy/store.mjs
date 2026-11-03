@@ -27,9 +27,12 @@ export function createStore(dir, { db: sql = null, log: say = console.error } = 
 		/** The database is the source of truth once it has a copy; before that, whatever was in the file is copied into it. */
 		async init() {
 			if (!sql) return { source: 'file', count: Object.keys(db).length };
-			const row = (await sql.query('select value from kv where key = $1', [KEY]))[0];
-			if (row && row.value && typeof row.value === 'object') { db = row.value; return { source: 'database', count: Object.keys(db).length }; }
-			toDb(); await queue; return { source: 'seeded from file', count: Object.keys(db).length };
+			const fromFile = db, row = (await sql.query('select value from kv where key = $1', [KEY]))[0];
+			const saved = row && row.value && typeof row.value === 'object' ? row.value : null;
+			// Neon is the source of truth once it holds customers. An empty copy (a first start that found no file) never blocks importing an old file later.
+			if (saved && Object.keys(saved).length) { db = saved; return { source: 'database', count: Object.keys(db).length }; }
+			db = fromFile; toDb(); await queue;
+			return { source: Object.keys(db).length ? 'seeded from file' : 'empty', count: Object.keys(db).length };
 		},
 		flush: () => queue,
 		list: () => Object.values(db).map(clone).sort((a, b) => b.created - a.created),
