@@ -183,3 +183,10 @@ test('the triage instructions say routine autorenew notices are not deadlines', 
 	const { ai, sup } = await setup({ tickets: [T(1, { subject: 'Win a free SEO audit', client: false })] }); await sup.run();
 	assert.match(ai.seen[0].system, /autorenew order pending processing/); assert.match(ai.seen[0].system, /NOT deadlines/); assert.match(ai.seen[0].system, /WHOIS verification required/);
 });
+
+test('the Support screen says exactly which settings are missing for answering tickets (names only)', async () => {
+	const db = await fresh(), mk = (writer, env) => createSupport({ db, reader: world([]).reader, writer, ai: scripted({}), mail: null, env, now: () => NOW, log: () => {} }).configured();
+	const half = makeWhmcsClient({ url: 'https://my.example.ca', identifier: 'wid', secret: '', actions: SUPPORT_ACTIONS });
+	assert.deepEqual(mk(half, {}).writeMissing, ['WHMCS_SUPPORT_API_SECRET', 'SUPPORT_ADMIN_USERNAME']); assert.deepEqual(mk(null, ENV).writeMissing, ['WHMCS_SUPPORT_API_ID', 'WHMCS_SUPPORT_API_SECRET']);
+	const full = mk(world([]).writer, ENV); assert.deepEqual(full.writeMissing, []); assert.equal(full.write, true);
+});
