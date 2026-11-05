@@ -208,6 +208,16 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 		store.update(id, (c) => { const x = c.prospect.cost?.[job]; if (x) Object.assign(x, { usd: r.usd, calls: r.calls, tokens: r.tokens, images: r.images, byModel: r.byModel, estimated: r.estimated, at: now() }); });
 		try { const l = readLedger(); l[`${id}:${job}`] = { id, name: ch.name, job, usd: r.usd, calls: r.calls, startedAt: e.startedAt, at: now(), final: !!e.final }; fs.mkdirSync(dataDir, { recursive: true }); fs.writeFileSync(ledgerFile, JSON.stringify(l)); } catch { /* the figure on the church record still shows */ }
 	}
+	/** Everything the church's site has spent through the gateway since its preview began (preview, full build, fixes during go-live, later use). Read on demand and at most every 5 minutes. */
+	async function costTotalRefresh(id, force = false) {
+		const ch = store.get(id), e = ch?.prospect?.cost?.preview;
+		if (!e?.base || !clients.gateway?.usageDetail) return;
+		const t = ch.prospect.cost.total;
+		if (!force && t && now() - (t.at || 0) < 300000) return;
+		let d; try { d = await clients.gateway.usageDetail(ch.slug); } catch (err) { log('prospects cost:', err.message); return; }
+		const r = priceDelta(snapshot(d.sites, ch.slug), e.base, prices);
+		store.update(id, (c) => { c.prospect.cost.total = { usd: r.usd, calls: r.calls, tokens: r.tokens, images: r.images, byModel: r.byModel, estimated: r.estimated, at: now() }; });
+	}
 	/** The build finished or stopped: take the last reading. A finished build closes the job; a failed one stays open in case it is retried. */
 	async function costClose(id, done) {
 		const ch = store.get(id); if (!ch?.prospect) return;
@@ -217,7 +227,7 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 	const costView = (ch) => {
 		const c = ch.prospect?.cost || {};
 		const one = (j) => { const e = c[j]; if (!e) return null; if (!e.base) return { state: 'unavailable', note: e.error || 'No reading was taken when the build started.' }; return { state: e.final ? 'final' : 'running', usd: Math.round((e.usd || 0) * 100) / 100, calls: e.calls || 0, estimated: !!e.estimated, tokens: e.tokens || null, byModel: e.byModel || [] }; };
-		return { preview: one('preview'), full: one('full'), tracked: !!clients.gateway?.available?.() };
+		const t = c.total; return { preview: one('preview'), full: one('full'), total: t ? { usd: Math.round((t.usd || 0) * 100) / 100, calls: t.calls || 0, estimated: !!t.estimated, at: t.at } : null, tracked: !!clients.gateway?.available?.() };
 	};
 	/** Averages and totals over every finished or running job, including previews that were deleted since. */
 	function costSummary() {
@@ -579,5 +589,5 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 	};
 	const stopTimers = () => { for (const t of timers) { clearInterval(t); clearTimeout(t); } timers = []; };
 
-	return { ctxFor, create, detect, start, tick, tickAll, costRefresh, costSummary, reportBuild, answer, cleanup, restartBuild, addDoc, removeDoc, keep, extend, licence, remove, switchToFull, adminLink, sweep, view, router, buildRouter, sign, verify, startTimers, stopTimers, briefFor };
+	return { costTotalRefresh, ctxFor, create, detect, start, tick, tickAll, costRefresh, costSummary, reportBuild, answer, cleanup, restartBuild, addDoc, removeDoc, keep, extend, licence, remove, switchToFull, adminLink, sweep, view, router, buildRouter, sign, verify, startTimers, stopTimers, briefFor };
 }

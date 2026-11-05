@@ -200,9 +200,29 @@ export function makeClients(cfg, deps = {}) {
 	// DNS lookups go to public resolvers, not the container's cache.
 	const resolver = deps.resolver || (() => { const r = new dns.Resolver(); r.setServers(cfg.dnsServers); return r; })();
 	const soft = async (p) => { try { return await p; } catch (e) { if (['ENODATA', 'ENOTFOUND', 'ENOENT', 'NXDOMAIN'].includes(e.code)) return []; throw e; } };
+	// Some hosts can't reach the public resolvers over UDP (queries time out). Fall back to DNS-over-HTTPS, which uses the same route as every other web call.
+	const RETRY = new Set(['ETIMEOUT', 'ETIMEDOUT', 'ECONNREFUSED', 'ESERVFAIL', 'EREFUSED', 'ECONNRESET', 'EAI_AGAIN']);
+	const DOH = { NS: 2, A: 1, AAAA: 28, CNAME: 5, MX: 15, TXT: 16 };
+	const doh = async (name, type) => {
+		const r = await f(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(name)}&type=${type}`, { headers: { accept: 'application/dns-json' } });
+		if (!r.ok) throw new Error('DNS-over-HTTPS lookup failed (HTTP ' + r.status + ')');
+		const j = await r.json(); if (j.Status === 3) return [];
+		if (j.Status !== 0) throw new Error('DNS lookup failed (status ' + j.Status + ')');
+		return (j.Answer || []).filter((a) => a.type === DOH[type]).map((a) => a.data);
+	};
+	const lookup = async (type, name, viaResolver, shape) => {
+		try { return await soft(viaResolver()); }
+		catch (e) { if (!RETRY.has(e.code)) throw e; return shape(await doh(name, type)); }
+	};
+	const unq = (t) => String(t).replace(/^"|"$/g, '').replace(/"\s*"/g, '');
 	const dnsClient = deps.dns || {
-		ns: (d) => soft(resolver.resolveNs(d)), a: (d) => soft(resolver.resolve4(d)), aaaa: (d) => soft(resolver.resolve6(d)),
-		cname: (d) => soft(resolver.resolveCname(d)), mx: (d) => soft(resolver.resolveMx(d)), txt: (d) => soft(resolver.resolveTxt(d)), ptr: (ip) => soft(resolver.reverse(ip)),
+		ns: (d) => lookup('NS', d, () => resolver.resolveNs(d), (a) => a.map((x) => x.replace(/\.$/, ''))),
+		a: (d) => lookup('A', d, () => resolver.resolve4(d), (a) => a),
+		aaaa: (d) => lookup('AAAA', d, () => resolver.resolve6(d), (a) => a),
+		cname: (d) => lookup('CNAME', d, () => resolver.resolveCname(d), (a) => a.map((x) => x.replace(/\.$/, ''))),
+		mx: (d) => lookup('MX', d, () => resolver.resolveMx(d), (a) => a.map((x) => { const [priority, exchange] = x.split(' '); return { priority: +priority, exchange: exchange.replace(/\.$/, '') }; })),
+		txt: (d) => lookup('TXT', d, () => resolver.resolveTxt(d), (a) => a.map((x) => [unq(x)])),
+		ptr: (ip) => soft(resolver.reverse(ip)),
 	};
 
 	const http = deps.http || {

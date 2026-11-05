@@ -110,9 +110,10 @@ export async function customerTest(ctx, ch) {
 	const p = await customerPlan(ctx, ch), dns = ctx.c.dns, d = ch.domain, checks = [];
 	const add = (id, label, state, detail = '') => checks.push({ id, label, state, detail });
 	const norm = (t) => String(Array.isArray(t) ? t.join('') : t).replace(/^"|"$/g, '').trim().toLowerCase();
-	const ns = (await dns.ns(d)).map((n) => String(n).toLowerCase().replace(/\.$/, '')), want = (p.nameservers || []).map((n) => n.toLowerCase());
+	let ns = [], nsErr = ''; try { ns = (await dns.ns(d)).map((n) => String(n).toLowerCase().replace(/\.$/, '')); } catch (e) { nsErr = String(e.message || e); }
+	const want = (p.nameservers || []).map((n) => n.toLowerCase());
 	if (!p.zone) add('zone', 'The domain is in our Cloudflare', 'no', 'Not yet. Press Set up DNS.');
-	else add('ns', 'The domain uses our nameservers', ns.length && ns.every((n) => want.includes(n)) ? 'ok' : 'no', ns.length ? `Right now: ${ns.join(', ')}. Ours: ${want.join(', ')}.` : 'No nameservers were found for this domain.');
+	else add('ns', 'The domain uses our nameservers', ns.length && ns.every((n) => want.includes(n)) ? 'ok' : 'no', nsErr ? `Couldn't look up the nameservers (${nsErr}). Try again.` : ns.length ? `Right now: ${ns.join(', ')}. Ours: ${want.join(', ')}.` : 'No nameservers were found for this domain.');
 	for (const l of p.lines) {
 		if (l.action === 'replace' && l.content === l.was) continue; // an old record that is going away
 		if (l.action === 'later') { add(`${l.type}:${l.name}`, `${l.type} ${l.name}`, 'info', l.note || 'Switched on later.'); continue; }
@@ -132,6 +133,44 @@ export async function customerTest(ctx, ch) {
 	const site = await isOurSite(ctx, d);
 	add('site', `https://${d} shows our new site`, site.ours ? 'ok' : 'info', site.ours ? '' : 'Not showing yet. That is expected until the site is moved onto the real domain.');
 	return { domain: d, checks, ok: checks.every((c) => c.state === 'ok' || c.state === 'info'), nameservers: p.nameservers || [] };
+}
+
+/**
+ * One pass at moving the preview site onto the real domain: add the domain to the Hostinger site, certificate, WordPress address, preview mode off, www/robots/sitemap,
+ * then switch the website records to proxied in our Cloudflare. Each pass fixes what it can and stops at the first thing that needs time (Hostinger takes minutes).
+ * Safe to run again: it only does what still tests "no".
+ */
+export async function customerGolive(ctx, ch) {
+	const stage = stageByKey('golive'), items = [], res = {};
+	if (!ch.domain) throw new Error('This customer has no domain yet.');
+	let stopped = false;
+	for (const q of reqsFor(stage, ch)) {
+		if (stopped) { items.push({ id: q.id, label: q.label, state: 'blocked', detail: 'Waiting for the step before it.' }); res[q.id] = { state: 'blocked' }; continue; }
+		if ((q.deps || []).some((d) => !depMet(res[d]?.state))) { items.push({ id: q.id, label: q.label, state: 'blocked', detail: 'Waiting for the step before it.' }); res[q.id] = { state: 'blocked' }; continue; }
+		let r; try { r = await q.test.call(q, ctx, ch); } catch (e) { r = { state: 'error', detail: e.message }; }
+		let note = '';
+		if (r.state === 'no' && q.fix) {
+			const f = await fixReq(ctx, ch, stage, q, r);
+			note = f.detail || f.howTo || '';
+			if (f.ok) { ctx.memo = {}; try { r = await q.test.call(q, ctx, ch); } catch (e) { r = { state: 'error', detail: e.message }; } }
+		}
+		res[q.id] = r;
+		items.push({ id: q.id, label: q.label, state: r.state, detail: [note, r.detail].filter(Boolean).join('\n') });
+		if (!isSatisfied(r.state) && q.id !== 'extras') stopped = true;
+	}
+	const allOk = reqsFor(stage, ch).every((q) => isSatisfied(res[q.id]?.state));
+	// proxy the website records only once the certificate is good, and only in a zone we manage
+	let proxy = null;
+	if (allOk && ch.customer?.dns === 'ours' && ctx.c.cloudflare.available()) {
+		const cf = ctx.c.cloudflare, z = await zoneOf(ctx, ch.domain);
+		if (z) {
+			const recs = (await cf.records(z.id)).filter((r) => (r.type === 'A' && r.name === ch.domain && r.content === ctx.c.cfg.hostingerIp) || (r.type === 'CNAME' && r.name === 'www.' + ch.domain));
+			let n = 0; for (const r of recs) if (!r.proxied) { try { await cf.updateRecord(z.id, r.id, { type: r.type, name: r.name, content: r.content, proxied: true }); n++; } catch (e) { proxy = { state: 'error', detail: e.message }; } }
+			proxy ||= { state: 'ok', detail: n ? `Switched on the Cloudflare proxy for ${n} website record${n > 1 ? 's' : ''}.` : 'The website records are already proxied.' };
+		}
+	}
+	if (proxy) items.push({ id: 'proxy', label: 'Cloudflare proxy on for the website and www', ...proxy });
+	return { items, live: allOk, results: res };
 }
 
 /** Run one WP-CLI command on a church's preview site. Returns { code, out, err } or { unavailable } / { missing }. */

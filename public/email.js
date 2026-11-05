@@ -24,3 +24,22 @@ $('pPrev').onclick = (e) => go(e.target, $('rPm'), '/postmark', { domain: $('dom
 $('pRun').onclick = (e) => go(e.target, $('rPm'), '/postmark', { domain: $('domain').value, confirm: true }, `Set up Postmark and change DNS records for ${$('domain').value}?`);
 $('hRun').onclick = (e) => go(e.target, $('rHealth'), '/health', { domain: $('domain').value });
 $('tRun').onclick = (e) => go(e.target, $('rTest'), '/test', { domain: $('domain').value, to: $('to').value, confirm: true }, `Send a test email from test@${$('domain').value} to ${$('to').value}?`);
+
+// Come back to where you were: the fields are remembered (never the password), and the server keeps the last result of each step even if you left while it was running.
+const SECT = { create: 'rCreate', postmark: 'rPm', health: 'rHealth', send: 'rTest', test: 'rTest' };
+const saveFields = () => { try { localStorage.setItem('emailSetup', JSON.stringify({ domain: $('domain').value, boxes: $('boxes').value, to: $('to').value })); } catch { /* optional */ } };
+['domain', 'boxes', 'to'].forEach((id) => $(id).addEventListener('input', saveFields));
+let poll = null;
+async function restore() {
+	const d = $('domain').value.trim(); if (!d) return;
+	let j; try { const r = await fetch('/api/email/state?domain=' + encodeURIComponent(d), { headers: H }); j = await r.json(); } catch { return; }
+	for (const [step, h] of Object.entries(j.history || {})) { const el = $(SECT[step]); if (!el) continue; show(el, h.items); el.insertAdjacentHTML('afterbegin', `<li class="info"><span class="ic">Last run</span><div>${new Date(h.at).toLocaleString()}${h.by ? ' by ' + esc(h.by) : ''}</div></li>`); }
+	clearTimeout(poll);
+	if (j.running) { $('err').textContent = `Still running on the server: ${j.running}. This page will update when it finishes.`; poll = setTimeout(restore, 4000); } else if ($('err').textContent.startsWith('Still running')) $('err').textContent = '';
+}
+(() => {
+	let saved = {}; try { saved = JSON.parse(localStorage.getItem('emailSetup') || '{}'); } catch { /* none */ }
+	const q = new URLSearchParams(location.search).get('domain');
+	$('domain').value = q || saved.domain || ''; if (!q || q === saved.domain) { $('boxes').value = saved.boxes || ''; $('to').value = saved.to || ''; }
+	$('domain').addEventListener('change', restore); restore();
+})();

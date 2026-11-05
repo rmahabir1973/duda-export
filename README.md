@@ -289,3 +289,10 @@ Portal callback endpoints (no sign-in, signed token per church): `/api/build/:id
 - **Nameserver email**: editable draft (contact email prefilled) sent through Postmark from `SUPPORT_FROM` (default support@churchwebglobal.com). Asks for a screenshot/PDF of their current DNS first, and warns about DNSSEC.
 - **Test**: checks nameservers, each planned record in public DNS, and whether the domain shows our site.
 - Not yet: moving the site onto the live domain, the proxy switch-on after SSL, the church-manages-DNS email (next releases).
+
+## v10.2 — Customers: one place for the whole job
+- **Test no longer fails on `queryNs ETIMEOUT`**: DNS lookups that time out fall back to DNS-over-HTTPS.
+- **All DNS at once**: the MX record is written with everything else (no more "switch on later"). Only DKIM is added later, once SmarterMail has made the key.
+- **Customers page** now has Build full site, Move preview to the live domain (add domain, certificate, WordPress address, preview off, www/robots/sitemap, then Cloudflare proxy on), the email setup history and a per-customer History.
+- **Email setup** remembers the fields (never the password), keeps working if you leave the page, and shows the last result of each step when you return. Results are also kept on the customer.
+- **AI cost** shows a running total for the church since its preview began, beside the preview and full-site figures.
