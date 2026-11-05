@@ -248,7 +248,7 @@ test('stage 6: passwords shown once and never stored; MX switch needs the ticks 
 		r = await t.j('/churches/grace-church/stages/mailboxes/fix', 'POST', { req: 'all', confirm: true });
 		assert.ok(!f.calls.cf.some((c) => c[1] === 'MX'), '"fix everything" must never switch the MX');
 		r = await t.j('/churches/grace-church/stages/mailboxes/fix', 'POST', { req: 'mx', confirm: true });
-		assert.ok(f.calls.cf.some((c) => c[0] === 'create' && c[1] === 'MX' && c[3] === 'mail.churchwebglobal.com'));
+		assert.ok(f.calls.cf.some((c) => c[0] === 'create' && c[1] === 'MX' && c[3] === 'mail.grace.org'));
 	} finally { t.close(); }
 });
 

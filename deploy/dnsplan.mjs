@@ -2,13 +2,22 @@
 import { mergeSpf } from './dnscheck.mjs';
 const lc = (s) => String(s || '').toLowerCase().replace(/\.$/, '');
 
+export const CANONICAL_DMARC = 'v=DMARC1; p=quarantine; pct=100';
+/** The old brand's reporting mailbox and SPF include. Nothing new should point at them. */
+const LEGACY = /churchwebsupport\.com/i;
+
 /**
  * domain: the church's real domain. existing: records already in our Cloudflare zone for it (empty when the zone isn't there yet).
  * inventory: the church's current public DNS (used to copy their records when our zone is still empty).
  * Each line: { type, name, content, priority?, proxy, action, was?, note? }. action: create, keep, copy, replace or later.
+ *
+ * Email with us (the standard set, the same for every church):
+ *   A mail -> mail server, MX @ -> mail.<domain> (10), CNAME autodiscover and autoconfig -> mail.<domain>,
+ *   TXT SPF "v=spf1 ip4:<mail server> ~all", TXT _dmarc "v=DMARC1; p=quarantine; pct=100", and the DKIM record SmarterMail generates.
+ * Email not with us: their mail records are left exactly as they are (a strict DMARC on someone else's mail could send it to spam).
  * The website and www are proxied (switched on after the certificate is issued); mail records never are.
  */
-export function buildDnsPlan({ domain, hostingerIp, email = false, mailIp = '', autodiscover = '', autoconfig = '', existing = [], inventory = [], dmarcRua = '' }) {
+export function buildDnsPlan({ domain, hostingerIp, email = false, mailIp = '', existing = [], inventory = [], dmarc = CANONICAL_DMARC }) {
 	const d = lc(domain), www = 'www.' + d, mail = 'mail.' + d;
 	const src = existing.length ? existing : inventory;
 	const at = (list, type, name) => list.filter((r) => r.type === type && lc(r.name) === lc(name));
@@ -18,7 +27,7 @@ export function buildDnsPlan({ domain, hostingerIp, email = false, mailIp = '', 
 		const have = at(existing, type, name).some((r) => lc(r.content) === lc(content));
 		lines.push({ type, name, content, proxy: false, action: have ? 'keep' : 'create', ...extra });
 	};
-	const replaceOld = (type, name, content) => { for (const r of at(src, type, name)) if (lc(r.content) !== lc(content)) { lines.push({ type: r.type, name: r.name, content: r.content, proxy: false, action: 'replace', was: r.content, note: 'The old record is not copied: the new one takes its place.' }); mark(r); } else mark(r); };
+	const replaceOld = (type, name, content) => { for (const r of at(src, type, name)) { if (lc(r.content) !== lc(content)) lines.push({ type: r.type, name: r.name, content: r.content, proxy: false, action: 'replace', was: r.content, note: 'The old record is not copied: the new one takes its place.' }); mark(r); } };
 
 	// the website
 	if (hostingerIp) {
@@ -27,24 +36,28 @@ export function buildDnsPlan({ domain, hostingerIp, email = false, mailIp = '', 
 		want('CNAME', www, d, { proxy: true });
 		replaceOld('A', www, ''); replaceOld('AAAA', www, ''); replaceOld('CNAME', www, d);
 	}
-	// email hosted with us: the mail server's name, the setup helpers, and the MX (which only switches once the mailboxes are ready)
+	// email hosted with us: the standard set
 	if (email) {
 		if (mailIp) { want('A', mail, mailIp); replaceOld('A', mail, mailIp); }
-		if (autodiscover) { want('CNAME', 'autodiscover.' + d, autodiscover); replaceOld('CNAME', 'autodiscover.' + d, autodiscover); }
-		if (autoconfig) { want('CNAME', 'autoconfig.' + d, autoconfig); replaceOld('CNAME', 'autoconfig.' + d, autoconfig); }
-		const mxHave = at(existing, 'MX', d).some((r) => lc(r.content) === mail);
-		lines.push({ type: 'MX', name: d, content: mail, priority: 10, proxy: false, action: mxHave ? 'keep' : 'later', note: mxHave ? '' : 'Switched on once the mailboxes are ready, so no mail is lost.' });
-		for (const r of at(src, 'MX', d)) if (lc(r.content) !== mail) { mark(r); lines.push({ type: 'MX', name: d, content: r.content, priority: r.priority, proxy: false, action: 'copy', note: 'Kept until the email switch, then removed by a person.' }); } else mark(r);
+		for (const n of ['autodiscover', 'autoconfig']) { want('CNAME', `${n}.${d}`, mail); replaceOld('CNAME', `${n}.${d}`, mail); replaceOld('A', `${n}.${d}`, ''); }
+		// if their mail already goes to our server it must be copied now, or it stops the moment the nameservers change; otherwise it waits for the mailboxes
+		const mxHave = at(existing, 'MX', d).some((r) => lc(r.content) === mail), mxToday = at(src, 'MX', d).some((r) => lc(r.content) === mail);
+		lines.push({ type: 'MX', name: d, content: mail, priority: 10, proxy: false, action: mxHave ? 'keep' : mxToday ? 'copy' : 'later', note: mxHave || mxToday ? '' : 'Switched on once the mailboxes are ready, so no mail is lost.' });
+		for (const r of at(src, 'MX', d)) { mark(r); if (lc(r.content) !== mail) lines.push({ type: 'MX', name: d, content: r.content, priority: r.priority, proxy: false, action: 'copy', note: 'Kept until the email switch, then removed by a person.' }); }
+		// SPF: keep what else they send from, drop the old brand's include, add our mail server
+		const oldSpf = at(src, 'TXT', d).filter((r) => /^"?v=spf1/i.test(r.content));
+		const spf = mergeSpf(oldSpf.map((r) => r.content.replace(/^"|"$/g, '').split(/\s+/).filter((t) => !LEGACY.test(t)).join(' ')), { ip4: mailIp ? [mailIp] : [] });
+		const spfHave = at(existing, 'TXT', d).some((r) => r.content.replace(/^"|"$/g, '') === spf.record);
+		oldSpf.forEach(mark);
+		lines.push({ type: 'TXT', name: d, content: spf.record, proxy: false, action: spfHave ? 'keep' : oldSpf.length ? 'replace' : 'create', was: oldSpf.length && !spfHave ? oldSpf[0].content : undefined, note: spf.tooManyLookups ? 'Too many SPF lookups: needs a person to tidy.' : '' });
+		// DMARC: the standard one, unless the church already has its own that reports somewhere of theirs. The old brand's report address is dropped (nobody reads it).
+		const dm = at(src, 'TXT', '_dmarc.' + d), own = dm.find((r) => !LEGACY.test(r.content));
+		dm.forEach(mark);
+		if (own) lines.push({ type: 'TXT', name: '_dmarc.' + d, content: own.content, proxy: false, action: existing.length ? 'keep' : 'copy', note: 'Their own DMARC policy is kept.' });
+		else lines.push({ type: 'TXT', name: '_dmarc.' + d, content: dmarc, proxy: false, action: at(existing, 'TXT', '_dmarc.' + d).some((r) => r.content.replace(/^"|"$/g, '') === dmarc) ? 'keep' : dm.length ? 'replace' : 'create', was: dm[0]?.content, note: dm.length ? 'Replaces the old policy that mailed reports to the old brand\'s postmaster box.' : '' });
+		// DKIM: SmarterMail makes the key once the domain exists, so it can only be added then
+		lines.push({ type: 'TXT', name: `<selector>._domainkey.${d}`, content: 'The key SmarterMail generates for this domain', proxy: false, action: 'later', note: 'Copied here automatically once DKIM signing is switched on in SmarterMail.' });
 	}
-	// sending authentication: one SPF record that covers everyone, and DMARC
-	const oldSpf = at(src, 'TXT', d).filter((r) => /^"?v=spf1/i.test(r.content));
-	const spf = mergeSpf(oldSpf.map((r) => r.content.replace(/^"|"$/g, '')), { includes: ['spf.mtasv.net'], hosts: email ? [mail] : [] });
-	const spfHave = at(existing, 'TXT', d).some((r) => r.content.replace(/^"|"$/g, '') === spf.record);
-	oldSpf.forEach(mark);
-	lines.push({ type: 'TXT', name: d, content: spf.record, proxy: false, action: spfHave ? 'keep' : oldSpf.length ? 'replace' : 'create', was: oldSpf.length && !spfHave ? oldSpf[0].content : undefined, note: spf.tooManyLookups ? 'Too many SPF lookups: needs a person to tidy.' : 'One SPF record that includes Postmark' + (email ? ' and our mail server.' : '.') });
-	const dm = at(src, 'TXT', '_dmarc.' + d);
-	if (dm.length) { dm.forEach(mark); lines.push({ type: 'TXT', name: '_dmarc.' + d, content: dm[0].content, proxy: false, action: existing.length ? 'keep' : 'copy' }); }
-	else if (dmarcRua) lines.push({ type: 'TXT', name: '_dmarc.' + d, content: `v=DMARC1; p=none; rua=mailto:${dmarcRua}`, proxy: false, action: 'create' });
 	// everything else they have today is copied as it is (only while our zone is still empty)
 	if (!existing.length) for (const r of inventory) if (!handled.has(`${r.type}|${lc(r.name)}|${lc(r.content)}`)) lines.push({ type: r.type, name: r.name, content: r.content, priority: r.priority, proxy: false, action: 'copy' });
 	return lines;

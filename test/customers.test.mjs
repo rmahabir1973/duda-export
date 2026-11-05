@@ -7,38 +7,54 @@ import { createStore } from '../deploy/store.mjs';
 import { createCustomers, cleanDomain } from '../deploy/customers.mjs';
 import { buildDnsPlan, planCounts } from '../deploy/dnsplan.mjs';
 
-const base = { domain: 'carlisleuc.ca', hostingerIp: '1.2.3.4', mailIp: '212.28.180.63', autodiscover: 'autodiscover.churchwebsupport.com', autoconfig: 'autoconfig.churchwebsupport.com', dmarcRua: 'postmaster@churchwebglobal.com' };
+const base = { domain: 'carlisleuc.ca', hostingerIp: '1.2.3.4', mailIp: '212.28.180.63' };
 const find = (lines, type, name) => lines.filter((l) => l.type === type && l.name === name);
+const DMARC = 'v=DMARC1; p=quarantine; pct=100';
 
-test('plan: a church with its own email elsewhere gets the website, SPF and DMARC, and its old records are copied', () => {
-	const inventory = [{ type: 'A', name: 'carlisleuc.ca', content: '100.24.208.97' }, { type: 'AAAA', name: 'carlisleuc.ca', content: '2600::1' }, { type: 'CNAME', name: 'www.carlisleuc.ca', content: 's.multiscreensite.com' }, { type: 'MX', name: 'carlisleuc.ca', content: 'aspmx.l.google.com', priority: 1 }, { type: 'TXT', name: 'carlisleuc.ca', content: 'v=spf1 include:_spf.google.com ~all' }, { type: 'TXT', name: 'carlisleuc.ca', content: 'google-site-verification=abc' }];
+test('plan: a church whose email is elsewhere gets the website only; their mail records are left exactly as they are', () => {
+	const inventory = [{ type: 'A', name: 'carlisleuc.ca', content: '100.24.208.97' }, { type: 'AAAA', name: 'carlisleuc.ca', content: '2600::1' }, { type: 'CNAME', name: 'www.carlisleuc.ca', content: 's.multiscreensite.com' }, { type: 'MX', name: 'carlisleuc.ca', content: 'aspmx.l.google.com', priority: 1 }, { type: 'TXT', name: 'carlisleuc.ca', content: 'v=spf1 include:_spf.google.com ~all' }, { type: 'TXT', name: 'carlisleuc.ca', content: 'google-site-verification=abc' }, { type: 'TXT', name: '_dmarc.carlisleuc.ca', content: 'v=DMARC1; p=none' }];
 	const lines = buildDnsPlan({ ...base, email: false, inventory });
 	assert.deepEqual(find(lines, 'A', 'carlisleuc.ca').map((l) => [l.action, l.content, l.proxy]), [['create', '1.2.3.4', true], ['replace', '100.24.208.97', false]]);
 	assert.equal(find(lines, 'AAAA', 'carlisleuc.ca')[0].action, 'replace', 'the IPv6 record would send people to the old host');
 	assert.deepEqual(find(lines, 'CNAME', 'www.carlisleuc.ca').map((l) => [l.action, l.content, l.proxy]), [['create', 'carlisleuc.ca', true], ['replace', 's.multiscreensite.com', false]]);
-	assert.equal(find(lines, 'MX', 'carlisleuc.ca')[0].action, 'copy', 'their own mail keeps working');
-	const spf = find(lines, 'TXT', 'carlisleuc.ca').filter((l) => /^v=spf1/.test(l.content));
-	assert.equal(spf.length, 1); assert.match(spf[0].content, /include:_spf\.google\.com/); assert.match(spf[0].content, /include:spf\.mtasv\.net/); assert.equal(spf[0].action, 'replace');
+	assert.equal(find(lines, 'MX', 'carlisleuc.ca')[0].action, 'copy');
+	assert.equal(find(lines, 'TXT', 'carlisleuc.ca').find((l) => /spf1/.test(l.content)).content, 'v=spf1 include:_spf.google.com ~all', 'their SPF is not touched');
+	assert.equal(find(lines, 'TXT', 'carlisleuc.ca').find((l) => /spf1/.test(l.content)).action, 'copy');
+	assert.equal(find(lines, 'TXT', '_dmarc.carlisleuc.ca')[0].content, 'v=DMARC1; p=none', 'a strict DMARC is never forced onto someone else\'s mail');
 	assert.equal(find(lines, 'TXT', 'carlisleuc.ca').find((l) => /google-site/.test(l.content)).action, 'copy', 'verification records are not lost');
-	assert.equal(find(lines, 'TXT', '_dmarc.carlisleuc.ca')[0].action, 'create');
-	assert.ok(!lines.some((l) => l.name === 'mail.carlisleuc.ca'), 'no mail server records when email is not with us');
+	assert.ok(!lines.some((l) => /^(mail|autodiscover|autoconfig)\./.test(l.name)), 'no mail server records when email is not with us');
 });
 
-test('plan: email with us adds mail, autodiscover and autoconfig (never proxied) and holds the MX back until the mailboxes exist', () => {
-	const lines = buildDnsPlan({ ...base, email: true, inventory: [{ type: 'MX', name: 'carlisleuc.ca', content: 'old.mail.example', priority: 5 }] });
+test('plan: carlisleuc.ca today (email with us, old brand records) becomes the standard set', () => {
+	const inventory = [{ type: 'A', name: 'carlisleuc.ca', content: '100.24.208.97' }, { type: 'A', name: 'carlisleuc.ca', content: '35.172.94.1' }, { type: 'A', name: 'mail.carlisleuc.ca', content: '212.28.180.63' }, { type: 'CNAME', name: 'autoconfig.carlisleuc.ca', content: 'autoconfig.churchwebsupport.com' }, { type: 'CNAME', name: 'autodiscover.carlisleuc.ca', content: 'autodiscover.churchwebsupport.com' }, { type: 'CNAME', name: 'www.carlisleuc.ca', content: 's.multiscreensite.com' }, { type: 'MX', name: 'carlisleuc.ca', content: 'mail.carlisleuc.ca', priority: 10 }, { type: 'TXT', name: 'carlisleuc.ca', content: 'v=spf1 include:churchwebsupport.com ~all' }, { type: 'TXT', name: '_dmarc.carlisleuc.ca', content: 'v=DMARC1; p=quarantine; rua=mailto:postmaster@churchwebsupport.com; ruf=mailto:postmaster@churchwebsupport.com; fo=1; pct=100; ri=86400' }];
+	const lines = buildDnsPlan({ ...base, email: true, inventory });
 	assert.deepEqual(find(lines, 'A', 'mail.carlisleuc.ca').map((l) => [l.action, l.content, l.proxy]), [['create', '212.28.180.63', false]]);
-	assert.equal(find(lines, 'CNAME', 'autodiscover.carlisleuc.ca')[0].proxy, false);
-	assert.equal(find(lines, 'CNAME', 'autoconfig.carlisleuc.ca')[0].content, 'autoconfig.churchwebsupport.com');
+	for (const n of ['autodiscover', 'autoconfig']) {
+		const l = find(lines, 'CNAME', `${n}.carlisleuc.ca`);
+		assert.deepEqual(l.map((x) => [x.action, x.content, x.proxy]), [['create', 'mail.carlisleuc.ca', false], ['replace', `${n}.churchwebsupport.com`, false]]);
+	}
+	const mx = find(lines, 'MX', 'carlisleuc.ca'); assert.equal(mx.length, 1); assert.deepEqual([mx[0].content, mx[0].priority, mx[0].action], ['mail.carlisleuc.ca', 10, 'copy'], 'their mail already comes to us, so it must exist the moment the nameservers change');
+	const spf = find(lines, 'TXT', 'carlisleuc.ca'); assert.equal(spf.length, 1); assert.equal(spf[0].content, 'v=spf1 ip4:212.28.180.63 ~all'); assert.equal(spf[0].action, 'replace');
+	const dm = find(lines, 'TXT', '_dmarc.carlisleuc.ca'); assert.equal(dm.length, 1); assert.equal(dm[0].content, DMARC); assert.equal(dm[0].action, 'replace');
+	assert.equal(find(lines, 'TXT', '<selector>._domainkey.carlisleuc.ca')[0].action, 'later');
+	assert.ok(!lines.some((l) => l.action !== 'replace' && /churchwebsupport/i.test(l.content)), 'nothing new points at the old brand');
+});
+
+test('plan: a new email customer gets the standard set, the MX waits for the mailboxes, and their own DMARC and other senders are kept', () => {
+	const lines = buildDnsPlan({ ...base, email: true, inventory: [{ type: 'MX', name: 'carlisleuc.ca', content: 'old.mail.example', priority: 5 }, { type: 'TXT', name: 'carlisleuc.ca', content: 'v=spf1 include:servers.mcsv.net ~all' }, { type: 'TXT', name: '_dmarc.carlisleuc.ca', content: 'v=DMARC1; p=none; rua=mailto:it@church.ca' }] });
 	const mx = find(lines, 'MX', 'carlisleuc.ca');
 	assert.equal(mx.find((l) => l.content === 'mail.carlisleuc.ca').action, 'later');
 	assert.equal(mx.find((l) => l.content === 'old.mail.example').action, 'copy', 'the old MX stays until the switch');
-	assert.match(find(lines, 'TXT', 'carlisleuc.ca')[0].content, /a:mail\.carlisleuc\.ca/);
+	assert.equal(find(lines, 'TXT', 'carlisleuc.ca')[0].content, 'v=spf1 include:servers.mcsv.net ip4:212.28.180.63 ~all');
+	assert.equal(find(lines, 'TXT', '_dmarc.carlisleuc.ca')[0].content, 'v=DMARC1; p=none; rua=mailto:it@church.ca');
+	assert.equal(buildDnsPlan({ ...base, email: true }).find((l) => l.name === '_dmarc.carlisleuc.ca').content, DMARC);
 });
 
-test('plan: once the zone exists the plan says what is already in place and does not copy again', () => {
-	const existing = [{ id: '1', type: 'A', name: 'carlisleuc.ca', content: '1.2.3.4' }, { id: '2', type: 'CNAME', name: 'www.carlisleuc.ca', content: 'carlisleuc.ca' }, { id: '3', type: 'TXT', name: 'carlisleuc.ca', content: '"v=spf1 include:spf.mtasv.net ~all"' }, { id: '4', type: 'TXT', name: '_dmarc.carlisleuc.ca', content: 'v=DMARC1; p=none' }];
-	const lines = buildDnsPlan({ ...base, email: false, existing, inventory: [{ type: 'A', name: 'carlisleuc.ca', content: '9.9.9.9' }] });
-	assert.deepEqual(planCounts(lines), { keep: 4 });
+test('plan: once the zone holds the standard set the plan says so and does not copy again', () => {
+	const r = (type, name, content, extra = {}) => ({ id: name + type, type, name, content, ...extra });
+	const existing = [r('A', 'carlisleuc.ca', '1.2.3.4'), r('CNAME', 'www.carlisleuc.ca', 'carlisleuc.ca'), r('A', 'mail.carlisleuc.ca', '212.28.180.63'), r('CNAME', 'autodiscover.carlisleuc.ca', 'mail.carlisleuc.ca'), r('CNAME', 'autoconfig.carlisleuc.ca', 'mail.carlisleuc.ca'), r('MX', 'carlisleuc.ca', 'mail.carlisleuc.ca', { priority: 10 }), r('TXT', 'carlisleuc.ca', '"v=spf1 ip4:212.28.180.63 ~all"'), r('TXT', '_dmarc.carlisleuc.ca', `"${DMARC}"`)];
+	const lines = buildDnsPlan({ ...base, email: true, existing, inventory: [{ type: 'A', name: 'carlisleuc.ca', content: '9.9.9.9' }] });
+	assert.deepEqual(planCounts(lines), { keep: 8, later: 1 });
 });
 
 test('plan: without the Hostinger address the website records are left out rather than guessed', () => {

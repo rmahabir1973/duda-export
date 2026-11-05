@@ -81,7 +81,7 @@ export async function customerPlan(ctx, ch) {
 	const inv = existing.length ? [] : await inventory(ctx, ch.domain);
 	let nameservers = []; if (z) { try { nameservers = (await cf.zone(z.id)).name_servers || []; } catch { /* shown later */ } }
 	const email = ch.plan === 'email';
-	return { domain: ch.domain, zone: !!z, zoneStatus: z?.status || '', nameservers, hostingerIp: cfg.hostingerIp || '', cloudflare: cf.available(), copiedFromPublic: inv.length, lines: buildDnsPlan({ domain: ch.domain, hostingerIp: cfg.hostingerIp, email, mailIp: cfg.mailIp, autodiscover: cfg.autodiscoverTarget, autoconfig: cfg.autoconfigTarget, existing, inventory: inv, dmarcRua: cfg.dmarcRua }) };
+	return { domain: ch.domain, zone: !!z, zoneStatus: z?.status || '', nameservers, hostingerIp: cfg.hostingerIp || '', cloudflare: cf.available(), copiedFromPublic: inv.length, lines: buildDnsPlan({ domain: ch.domain, hostingerIp: cfg.hostingerIp, email, mailIp: cfg.mailIp, existing, inventory: inv }) };
 }
 
 /** Run one WP-CLI command on a church's preview site. Returns { code, out, err } or { unavailable } / { missing }. */
@@ -524,10 +524,10 @@ export const STAGES = [
 			manual('moved', 'Has their old email been moved over (or do they have none)?', 'Move old mail with imapsync, or confirm the church has no email to move. Then tick this box.'),
 			{
 				id: 'mx', label: 'Does email now go to our mail server?', services: ['cloudflare'], deps: ['boxes', 'moved'], fixLabel: 'Switch email to our server',
-				async test(ctx, ch) { if (!ch.domain) return noDomain(); const mx = (await ctx.c.dns.mx(ch.domain)).map((m) => String(m.exchange || m).toLowerCase().replace(/\.$/, '')); return mx.some((h) => ctx.c.cfg.ourMxHosts.includes(h)) ? ok(mx.join(', ')) : no(mx.length ? `Email still goes to ${mx.join(', ')}.` : 'No email records.'); },
+				async test(ctx, ch) { if (!ch.domain) return noDomain(); const mx = (await ctx.c.dns.mx(ch.domain)).map((m) => String(m.exchange || m).toLowerCase().replace(/\.$/, '')); return mx.some((h) => ctx.c.cfg.ourMxHosts.includes(h) || h === 'mail.' + ch.domain) ? ok(mx.join(', ')) : no(mx.length ? `Email still goes to ${mx.join(', ')}.` : 'No email records.'); },
 				async fix(ctx, ch) {
 					const z = await zoneOf(ctx, ch.domain); if (!z) return { ok: false, detail: 'The domain isn\'t in our Cloudflare yet (Domain setup).' };
-					const plan = planMailRecords({ domain: ch.domain, mailHost: ctx.c.cfg.mailHost, existing: await cfRecords(ctx, z.id), cutoverMx: true });
+					const plan = planMailRecords({ domain: ch.domain, mailHost: 'mail.' + ch.domain, existing: await cfRecords(ctx, z.id), cutoverMx: true });
 					const r = await applyPlan(ctx, z.id, plan);
 					return { ok: !r.flagged.length, detail: [...r.done, ...r.flagged.map((f) => 'A person must remove this in Cloudflare: ' + f)].join('\n') || 'Done.' };
 				},
