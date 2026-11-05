@@ -46,18 +46,28 @@ const hostingerPlugins = async (ctx, h) => { const t = await wpGet(ctx, h, 'plug
 const handCmd = (ctx, ch, args) => `cd ${sitePath(ctx.c.cfg, tempHost(ch, ctx.c.cfg))} && ${ctx.c.cfg.wpCli} ${args}`;
 
 
-/** Put the Oxygen licence key into the new site's wp-config.php (as the OXYGEN_LICENSE_KEY constant). The key comes from the portal's own settings and is never shown. */
+/** Oxygen has no wp-config setting for its licence. It keeps the key in its own storage and activates it with its own server, so we call its licence manager (the same call its Settings → License page makes). The key comes from the portal's own settings and is never shown. */
+const OXY_STATUS = "$m=\\Breakdance\\Licensing\\LicenseKeyManager::getInstance(); $v=$m->getStoredLicenseKeyValidityInfo(); $s=''; if(is_array($v)){array_walk_recursive($v,function($x,$k) use (&$s){ if($k==='license'&&is_string($x)&&$s==='') $s=$x; });} echo ($m->getStoredLicenseKey()?'HAS':'NONE').':'.$s;";
+const oxyStatus = (t) => { const m = /^(HAS|NONE):(\w*)/.exec(String(t || '').trim().split('\n').pop()); return m ? { has: m[1] === 'HAS', state: m[2] } : null; };
 export async function applyOxygenLicense(ctx, ch) {
 	const key = ctx.c.cfg.oxygenLicense;
 	if (!key) return { state: 'unknown', detail: 'Set OXYGEN_LICENSE_KEY in Railway so new sites can be licensed automatically.' };
 	const s = await siteOf(ctx, ch);
 	if (s.unavailable) return { state: 'unknown', detail: 'Hostinger SSH isn\'t set up on this server yet.' };
 	if (s.missing) return { state: 'no', detail: 'The site doesn\'t exist yet on Hostinger.' };
-	const cur = await wpGet(ctx, s.host, 'config get OXYGEN_LICENSE_KEY');
-	if (cur === key) return { state: 'ok', detail: 'The Oxygen licence key is in place.' };
-	const r = await wpRun(ctx, s.host, `config set OXYGEN_LICENSE_KEY ${shq(key)} --type=constant`);
+	const before = oxyStatus(await wpGet(ctx, s.host, `eval ${shq(OXY_STATUS)}`));
+	if (before?.has && before.state === 'valid') return { state: 'ok', detail: 'Oxygen is already licensed on this site.' };
+	const php = `\\Breakdance\\Licensing\\LicenseKeyManager::getInstance()->changeLicenseKey('${key.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}');`;
+	const r = await wpRun(ctx, s.host, `eval ${shq(php)}`);
 	if (r.code) return { state: 'error', detail: (r.err || r.out || '').split(key).join('••••').trim().slice(-300) };
-	return { state: 'ok', detail: 'Added the Oxygen licence key to the site.' };
+	const after = oxyStatus(await wpGet(ctx, s.host, `eval ${shq(OXY_STATUS)}`));
+	if (after?.has && after.state === 'valid') return { state: 'ok', detail: 'Oxygen is licensed and activated on this site.' };
+	return { state: 'error', detail: `The key was saved but Oxygen did not activate it${after?.state ? ` (it says: ${after.state})` : ''}. Check that the licence has a free site slot, then press Try again.` };
+}
+
+/** Free this site's Oxygen activation (best effort) so deleted previews don't use up the licence's site limit. */
+export async function releaseOxygenLicense(ctx, ch) {
+	try { const s = await siteOf(ctx, ch); if (s.unavailable || s.missing) return false; const r = await wpRun(ctx, s.host, `eval ${shq('\\Breakdance\\Licensing\\LicenseKeyManager::getInstance()->deactivateLicense();')}`); return r.code === 0; } catch { return false; }
 }
 
 

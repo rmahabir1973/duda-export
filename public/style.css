@@ -18,6 +18,8 @@ button.primary:disabled { opacity: .5; cursor: default; }
 button.sm { background: #fff; border: 1px solid #cfd4da; border-radius: 6px; padding: 4px 10px; cursor: pointer; font: inherit; font-size: 13px; }
 button.sm:hover { border-color: var(--p); color: var(--p); }
 button.sm.danger { color: #b32d2e; border-color: #e3b5b6; }
+button.sm.primary { background: var(--p); color: #fff; border-color: var(--p); margin-top: 0; padding: 4px 10px; font-weight: 600; } button.sm.primary:hover { color: #fff; opacity: .9; }
+button.sm.danger.confirm, button.sm.danger[data-del2] { background: #b32d2e; color: #fff; border-color: #b32d2e; }
 .hint { color: var(--muted); font-size: 13px; margin: 4px 0 0; }
 .err { color: #b32d2e; margin: 8px 0 0; min-height: 20px; }
 table { width: 100%; border-collapse: collapse; }
@@ -201,3 +203,4 @@ a.btn, button.sm2 { display: inline-block; background: var(--p); color: #fff; bo
 .pr-docs{margin:6px 0;padding-left:18px}.pr-docs li.bad{color:#a02a1c}.pr-docs small{color:#6b7686}
 button[disabled]{opacity:.5;cursor:not-allowed}
 .pr-bar input{padding:8px 11px;border:1px solid #cfd4da;border-radius:7px;font:inherit;background:#fff}
+.c-cost .cost{margin-bottom:4px}.c-cost .cost b{display:block;font-size:1.05rem}.c-cost small{display:block;color:#5b6675}.cost-note{color:#7a5a00}

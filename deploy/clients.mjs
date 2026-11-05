@@ -31,6 +31,7 @@ export function configFromEnv(env = process.env) {
 	return {
 		gatewayUrl: (env.GATEWAY_URL || 'https://ai.churchwebglobal.com').replace(/\/$/, ''),
 		gatewayAdminKey: clean(env.GATEWAY_ADMIN_KEY),
+		aiPrices: String(env.AI_PRICES || '').trim(),
 		defaultTokenCap: Number(env.DEFAULT_DAILY_TOKENS || 0),
 		defaultImageCap: Number(env.DEFAULT_DAILY_IMAGES || 0),
 		cloudflareBase: (env.CLOUDFLARE_API_BASE || 'https://api.cloudflare.com/client/v4').replace(/\/$/, ''),
@@ -116,6 +117,12 @@ export function makeClients(cfg, deps = {}) {
 			return r.data;
 		},
 		/** Does this token work? Uses the same call the plugin makes. */
+		/** All-time totals per model for one site, including cache tokens (needs the gateway with /v1/admin/usage-detail). */
+		async usageDetail(site) {
+			const r = await req(f, `${cfg.gatewayUrl}/v1/admin/usage-detail?site=${encodeURIComponent(site)}`, { headers: { 'x-admin-key': cfg.gatewayAdminKey } });
+			if (!r.ok) throw new Error('Gateway: ' + (r.status === 404 ? 'the live gateway does not have the usage-detail endpoint yet: deploy the new cwai-gateway.zip' : gwErr(r)));
+			return r.data; // {at, sites: [{site, model, req, tin, tout, cr, cw, img}]}
+		},
 		async tokenWorks(token) {
 			const r = await req(f, `${cfg.gatewayUrl}/v1/usage`, { headers: { 'x-api-key': token } });
 			return r.ok;

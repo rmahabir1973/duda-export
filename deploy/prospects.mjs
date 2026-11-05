@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
 import * as realChecks from './checks.mjs';
+import { priceTable, snapshot, priceDelta } from './pricing.mjs';
 import { configured, shq } from './clients.mjs';
 import { slugify, normDomain, SLUG_RE, DOMAIN_RE } from './store.mjs';
 import { extractDocument } from './docs.mjs';
@@ -181,6 +182,51 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 		return { package: `${d}/package.zip`, brief: `${d}/brief.md` };
 	}
 	const previewHost = (ch) => `${ch.slug}.${clients.cfg.previewDomain}`;
+	/* ------------------------------------------------------------ what the AI cost
+	   Each church site has its own gateway key, and the gateway counts every call per site. A job's cost is the difference between the gateway's totals when the job started and now, so a re-used site name or a retry can't muddy it.
+	   A retry adds to the same job (it is money spent), and the finished figure is kept in a small file so deleted previews still count toward the averages. */
+	const prices = priceTable(clients.cfg?.aiPrices);
+	const ledgerFile = path.join(dataDir, 'ai-costs.json');
+	const readLedger = () => { try { return JSON.parse(fs.readFileSync(ledgerFile, 'utf8')) || {}; } catch { return {}; } };
+	const jobOf = (ch) => (ch.prospect?.mode === 'full' ? 'full' : 'preview');
+	const COST_EVERY_MS = 30000;
+	async function costBase(ch) {
+		const job = jobOf(ch);
+		if (ch.prospect.cost?.[job] || !clients.gateway?.available?.() || !clients.gateway.usageDetail) return;
+		let entry;
+		try { const d = await clients.gateway.usageDetail(ch.slug); entry = { base: snapshot(d.sites, ch.slug), startedAt: now(), usd: 0, calls: 0 }; }
+		catch (e) { entry = { base: null, startedAt: now(), error: clip(e.message, 200) }; }
+		store.update(ch.id, (c) => { (c.prospect.cost ||= {})[job] = entry; });
+	}
+	async function costRefresh(id, force = false) {
+		const ch = store.get(id), job = ch?.prospect && jobOf(ch), e = job && ch.prospect.cost?.[job];
+		if (!e || !e.base || (e.final && !force) || !clients.gateway?.usageDetail) return;
+		if (!force && now() - (e.at || 0) < COST_EVERY_MS) return;
+		let d;
+		try { d = await clients.gateway.usageDetail(ch.slug); } catch (err) { log('prospects cost:', err.message); return; }
+		const r = priceDelta(snapshot(d.sites, ch.slug), e.base, prices);
+		store.update(id, (c) => { const x = c.prospect.cost?.[job]; if (x) Object.assign(x, { usd: r.usd, calls: r.calls, tokens: r.tokens, images: r.images, byModel: r.byModel, estimated: r.estimated, at: now() }); });
+		try { const l = readLedger(); l[`${id}:${job}`] = { id, name: ch.name, job, usd: r.usd, calls: r.calls, startedAt: e.startedAt, at: now(), final: !!e.final }; fs.mkdirSync(dataDir, { recursive: true }); fs.writeFileSync(ledgerFile, JSON.stringify(l)); } catch { /* the figure on the church record still shows */ }
+	}
+	/** The build finished or stopped: take the last reading. A finished build closes the job; a failed one stays open in case it is retried. */
+	async function costClose(id, done) {
+		const ch = store.get(id); if (!ch?.prospect) return;
+		await costRefresh(id, true);
+		if (done) { const job = jobOf(ch); store.update(id, (c) => { const x = c.prospect.cost?.[job]; if (x) { x.final = true; x.endedAt = now(); } }); await costRefresh(id, true); }
+	}
+	const costView = (ch) => {
+		const c = ch.prospect?.cost || {};
+		const one = (j) => { const e = c[j]; if (!e) return null; if (!e.base) return { state: 'unavailable', note: e.error || 'No reading was taken when the build started.' }; return { state: e.final ? 'final' : 'running', usd: Math.round((e.usd || 0) * 100) / 100, calls: e.calls || 0, estimated: !!e.estimated, tokens: e.tokens || null, byModel: e.byModel || [] }; };
+		return { preview: one('preview'), full: one('full'), tracked: !!clients.gateway?.available?.() };
+	};
+	/** Averages and totals over every finished or running job, including previews that were deleted since. */
+	function costSummary() {
+		const rows = Object.values(readLedger()), by = (job) => rows.filter((x) => x.job === job && x.usd > 0);
+		const stat = (list) => ({ n: list.length, avg: list.length ? Math.round(list.reduce((a, x) => a + x.usd, 0) / list.length * 100) / 100 : 0, max: list.length ? Math.round(Math.max(...list.map((x) => x.usd)) * 100) / 100 : 0 });
+		const since = now() - 30 * DAY;
+		return { total: Math.round(rows.reduce((a, x) => a + x.usd, 0) * 100) / 100, last30: Math.round(rows.filter((x) => x.at >= since).reduce((a, x) => a + x.usd, 0) * 100) / 100, preview: stat(by('preview')), full: stat(by('full')) };
+	}
+
 	const briefFor = (ch) => buildBrief({ name: ch.name, domain: ch.prospect.domain, platform: ch.prospect.platform, mode: ch.prospect.mode, notes: ch.prospect.notes, docs: ch.prospect.docs, existing: !!ch.prospect.switchedAt });
 	async function stepBuild(ch) {
 		const run = ch.run, b = run.steps.build;
@@ -213,6 +259,7 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 			note(ch.id, 'Build waiting for the plugin\'s portal-build command', 'warn');
 			return true;
 		}
+		await costBase(ch); ch = store.get(ch.id);
 		try { const pushed = await pushFiles(ch); patch(ch.id, (rr) => { rr.pushed = pushed; }); ch = store.get(ch.id); }
 		catch (e) { setStep(ch.id, 'build', { state: 'failed', message: plain(e.message) }, { state: 'failed' }); return true; }
 		const r = await triggerBuild(ch, ctx, {});
@@ -258,7 +305,7 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 			try { patch(id, (r) => { r.state = 'failed'; const k = ['export', 'site', 'build'].find((s) => r.steps[s].state !== 'done'); if (k) r.steps[k] = { ...r.steps[k], state: 'failed', message: plain(e.message) }; }); } catch { /* record gone */ }
 		} finally { busy.delete(id); }
 	}
-	const tickAll = async () => { for (const c of store.list()) { if (c.run?.state === 'running') await tick(c.id); else if (c.run?.state === 'done' && !c.run.cleanup) runCleanup(c.id); } };
+	const tickAll = async () => { for (const c of store.list()) { if (['running', 'needs_input'].includes(c.run?.state) && c.prospect?.cost) costRefresh(c.id).catch((e) => log('prospects cost:', e.message)); if (c.run?.state === 'running') await tick(c.id); else if (c.run?.state === 'done' && !c.run.cleanup) runCleanup(c.id); } };
 
 	/** Start (or restart after a failure, or resume) a church's run. Finished steps are never redone. */
 	function start(id) {
@@ -290,6 +337,7 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 		const after = store.get(id), s = after.run.steps.build;
 		if (s.state === 'needs_input') tell(after, `Your answer is needed: ${after.name}`, `The AI building ${after.name} has a question:\n\n${s.question.text}\n\nAnswer it in the portal: ${baseUrl}/prospects`);
 		if (s.state === 'done') runCleanup(id);
+		if (s.state === 'done' || s.state === 'failed') costClose(id, s.state === 'done').catch((e) => log('prospects cost:', e.message));
 		if (s.state === 'done') tell(after, `Preview ready: ${after.name}`, `The preview for ${after.name} is ready:\nhttps://${previewHost(after)}\n\nIt will be deleted on ${new Date(after.prospect.expiresAt).toISOString().slice(0, 10)} unless you keep it.`);
 		if (s.state === 'failed') tell(after, `Build failed: ${after.name}`, s.message, true);
 		return after;
@@ -375,6 +423,7 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 			canDelete: !ch.stages?.golive?.done,
 			canRestart: s.site.state === 'done' && ['working', 'needs_input', 'blocked'].includes(s.build.state),
 			tidy: run.cleanup ? { state: run.cleanup.state, message: run.cleanup.message } : null,
+			cost: costView(ch),
 		};
 	}
 
@@ -384,6 +433,7 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 		if (host === tpl || /^build\d*$/.test(ch.slug) || ch.stages?.golive?.done) return { skipped: 'protected' };
 		if (!clients.hostinger.available()) return { skipped: 'Hostinger API key missing' };
 		const w = (await clients.hostinger.websites()).find((x) => x.domain === host);
+		if (w && engine.releaseOxygenLicense) { try { await Promise.race([engine.releaseOxygenLicense(ctxFor(), ch), new Promise((res) => setTimeout(res, 30000).unref?.())]); } catch { /* best effort */ } }
 		if (w) await clients.hostinger.deleteWebsite(host);
 		if (clients.gateway.available()) { try { await clients.gateway.revoke(ch.slug, true); } catch { /* best effort */ } }
 		try { fs.rmSync(dir(ch.id), { recursive: true, force: true }); } catch { /* ignore */ }
@@ -473,6 +523,7 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 		const pick = (req, res) => { const c = store.get(req.params.id); if (!c?.prospect) { res.status(404).json({ error: 'Prospect not found' }); return null; } return c; };
 		const wrap = (fn) => async (req, res) => { try { await fn(req, res); } catch (e) { res.status(e.status || 400).json({ error: e.message }); } };
 		r.get('/', (req, res) => res.json(store.list().map(view)));
+		r.get('/costs', (req, res) => res.json(costSummary()));
 		r.get('/detect', wrap(async (req, res) => res.json(await detect(req.query.url))));
 		r.post('/', wrap(async (req, res) => { const c = await create(req.body || {}, req.by); if (req.body?.start !== false) { start(c.id); tick(c.id); } res.status(201).json(view(store.get(c.id))); }));
 		r.get('/:id', (req, res) => { const c = pick(req, res); if (c) res.json(view(c)); });
@@ -518,5 +569,5 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 	};
 	const stopTimers = () => { for (const t of timers) { clearInterval(t); clearTimeout(t); } timers = []; };
 
-	return { create, detect, start, tick, tickAll, reportBuild, answer, cleanup, restartBuild, addDoc, removeDoc, keep, extend, remove, switchToFull, adminLink, sweep, view, router, buildRouter, sign, verify, startTimers, stopTimers, briefFor };
+	return { create, detect, start, tick, tickAll, costRefresh, costSummary, reportBuild, answer, cleanup, restartBuild, addDoc, removeDoc, keep, extend, remove, switchToFull, adminLink, sweep, view, router, buildRouter, sign, verify, startTimers, stopTimers, briefFor };
 }

@@ -10,12 +10,13 @@ import { buildBrief } from '../deploy/brief.mjs';
 import { extractDocument } from '../deploy/docs.mjs';
 import { zipSync, strToU8 } from 'fflate';
 import { applyOxygenLicense } from '../deploy/checks.mjs';
+import { priceTable, priceDelta, snapshot } from '../deploy/pricing.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'pros-'));
 const DAY = 86400000;
 const OK = new Set(['ok', 'info', 'warn']);
 
-function rig({ ssh = null, cwai = false, hostFails = false, autoDelete = false, golive = false } = {}) {
+function rig({ ssh = null, cwai = false, hostFails = false, autoDelete = false, golive = false, gw = null } = {}) {
 	const dir = tmp(), store = createStore(path.join(dir, 'deploy'));
 	const clock = { t: 1_800_000_000_000 }, mail = [], hostDeleted = [], bg = [], wp = [];
 	const st = { a: 'no', b: 'no', c: 'no' };
@@ -37,7 +38,7 @@ function rig({ ssh = null, cwai = false, hostFails = false, autoDelete = false, 
 		cfg: { previewDomain: 'churchwebglobal.com', templateSlug: 'build2' },
 		http: { get: async () => ({ status: 200, text: '<html><title>Grace United Church | Home</title><link href="https://static.cdn-website.com/x.css"></html>' }) },
 		hostinger: { available: () => true, websites: async () => [{ domain: 'grace-united-church.churchwebglobal.com' }], deleteWebsite: async (d) => { hostDeleted.push(d); } },
-		gateway: { available: () => false },
+		gateway: gw || { available: () => false },
 		...(ssh ? { ssh } : {}),
 	};
 	const exporter = { enqueue: async (b) => { calls.enqueue.push(b); return { id: 'job1' }; }, get: () => job };
@@ -204,14 +205,18 @@ test('30-day clean-up: warns once at 7 and 2 days, leaves live and kept sites al
 	await h.p.sweep(); assert.deepEqual(h.hostDeleted, [], 'a live site is never deleted'); assert.ok(h.store.get(e.id));
 });
 
-test('applyOxygenLicense writes the key as a constant, never shows it, and says what is missing', async () => {
-	const calls = [];
-	const ssh = { available: () => true, exec: async (cmd) => { calls.push(cmd); if (/test -f .*wp-config\.php/.test(cmd)) return { code: 0, out: 'FOUND', err: '' }; if (/config get OXYGEN_LICENSE_KEY/.test(cmd)) return { code: 1, out: '', err: 'nope' }; if (/config set OXYGEN_LICENSE_KEY/.test(cmd)) return { code: 0, out: 'Success', err: '' }; return { code: 0, out: '', err: '' }; } };
+test('applyOxygenLicense uses Oxygen\'s licence manager, checks it took, never shows the key, and says what is missing', async () => {
+	const calls = []; let stored = false;
+	const ssh = { available: () => true, exec: async (cmd) => { calls.push(cmd); if (/test -f .*wp-config\.php/.test(cmd)) return { code: 0, out: 'FOUND', err: '' }; if (/changeLicenseKey/.test(cmd)) { stored = true; return { code: 0, out: '', err: '' }; } if (/getStoredLicenseKeyValidityInfo/.test(cmd)) return { code: 0, out: stored ? 'HAS:valid' : 'NONE:', err: '' }; return { code: 0, out: '', err: '' }; } };
 	const mk = (key) => ({ c: { cfg: { oxygenLicense: key, previewDomain: 'churchwebglobal.com', siteRoot: '$HOME/domains/{host}/public_html', wpCli: 'wp' }, ssh }, memo: {} });
 	const ch = { slug: 'grace', domain: '' };
 	assert.equal((await applyOxygenLicense(mk(''), ch)).state, 'unknown');
-	const r = await applyOxygenLicense(mk('SECRETKEY123'), ch);
-	assert.equal(r.state, 'ok'); assert.ok(calls.some((c) => /config set OXYGEN_LICENSE_KEY 'SECRETKEY123' --type=constant/.test(c))); assert.doesNotMatch(JSON.stringify(r), /SECRETKEY123/);
+	const r = await applyOxygenLicense(mk("SECRET'KEY123"), ch);
+	assert.equal(r.state, 'ok'); assert.ok(calls.some((c) => /LicenseKeyManager::getInstance\(\)->changeLicenseKey\(/.test(c))); assert.ok(!calls.some((c) => /OXYGEN_LICENSE_KEY/.test(c)), 'no wp-config constant any more'); assert.doesNotMatch(JSON.stringify(r), /SECRET/);
+	const n = calls.length; assert.equal((await applyOxygenLicense(mk('SECRETKEY123'), ch)).state, 'ok'); assert.ok(!calls.slice(n).some((c) => /changeLicenseKey/.test(c)), 'already licensed: not changed again');
+	stored = false; const ssh2 = { ...ssh, exec: async (cmd) => /getStoredLicenseKeyValidityInfo/.test(cmd) ? { code: 0, out: 'HAS:invalid', err: '' } : ssh.exec(cmd) };
+	const bad = await applyOxygenLicense({ c: { cfg: { oxygenLicense: 'K', previewDomain: 'churchwebglobal.com', siteRoot: '$HOME/domains/{host}/public_html', wpCli: 'wp' }, ssh: ssh2 }, memo: {} }, ch);
+	assert.equal(bad.state, 'error'); assert.match(bad.detail, /did not activate it \(it says: invalid\)/);
 });
 
 async function readyRig(o = {}) {
@@ -324,4 +329,47 @@ test('the ZIP and the brief are put on the site over SSH, the build imports them
 	const bad = rig({ cwai: true, ssh: { available: () => true, exec: async (cmd) => (/^echo/.test(cmd) ? { code: 0, out: '/home/u1', err: '' } : { code: 1, out: '', err: 'No space left on device' }) } }); const d = await make(bad); bad.p.start(d.id);
 	bad.job.status = 'done'; for (let i = 0; i < 4; i++) await bad.p.tick(d.id);
 	assert.equal(bad.store.get(d.id).run.steps.build.state, 'failed'); assert.match(bad.store.get(d.id).run.steps.build.message, /Could not copy package\.zip/);
+});
+
+test('pricing: cache tokens are priced, an earlier reading is subtracted, unknown models are flagged', () => {
+	const t = priceTable('');
+	const now = { 'claude-sonnet-5-5': { req: 25, tin: 1500000, tout: 100000, cr: 10000000, cw: 2000000, img: 0 }, 'claude-haiku-5-5': { req: 4, tin: 1000000, tout: 200000, cr: 0, cw: 0, img: 0 } };
+	const base = { 'claude-sonnet-5-5': { req: 5, tin: 500000, tout: 0, cr: 0, cw: 0, img: 0 } };
+	const r = priceDelta(now, base, t);
+	assert.equal(r.usd, 9.2); assert.equal(r.calls, 24); assert.equal(r.estimated, true, 'Haiku is priced at its lower rate, so the total is a floor');
+	assert.deepEqual(r.tokens, { input: 2000000, output: 300000, cacheWrite: 2000000, cacheRead: 10000000 });
+	assert.equal(priceDelta({ 'mystery-model': { req: 1, tin: 1000000, tout: 0, cr: 0, cw: 0, img: 0 } }, {}, t).estimated, true);
+	assert.equal(priceDelta(base, now, t).usd, 0, 'a counter that went backwards never gives a negative cost');
+	assert.equal(priceTable('{"x":{"in":1,"out":2}}').x.cw, 1.25); assert.equal(priceTable('not json')['claude-sonnet-5-5'].out, 10);
+	assert.deepEqual(snapshot([{ site: 'a', model: 'm', req: 1, tin: 2, tout: 3, cr: 4, cw: 5, img: 0 }, { site: 'b', model: 'm', req: 9, tin: 9, tout: 9, cr: 9, cw: 9, img: 9 }], 'a'), { m: { req: 1, tin: 2, tout: 3, cr: 4, cw: 5, img: 0 } });
+});
+
+test('AI cost: a job costs what the gateway counted since it started, survives deletion in the averages, and a full build is its own job', async () => {
+	const rows = [{ site: 'grace-united-church', model: 'claude-sonnet-5-5', req: 5, tin: 500000, tout: 0, cr: 0, cw: 0, img: 0 }]; // an earlier site with the same name
+	const gw = { available: () => true, usageDetail: async () => ({ sites: rows.map((x) => ({ ...x })) }) };
+	const r = rig({ cwai: true, gw }); const c = await make(r); r.p.start(c.id);
+	r.job.status = 'done'; for (let i = 0; i < 8 && !r.store.get(c.id).run.buildStartedAt; i++) await r.p.tick(c.id);
+	assert.ok(r.store.get(c.id).prospect.cost.preview.base['claude-sonnet-5-5'], 'a reading was taken before the build started');
+	assert.equal(r.p.view(r.store.get(c.id)).cost.preview.usd, 0);
+	rows[0] = { ...rows[0], req: 25, tin: 1500000, tout: 100000, cr: 10000000, cw: 2000000 };
+	await r.p.costRefresh(c.id, true);
+	let v = r.p.view(r.store.get(c.id)).cost; assert.equal(v.preview.usd, 9); assert.equal(v.preview.state, 'running'); assert.equal(v.preview.calls, 20);
+	r.p.reportBuild(c.id, { state: 'done', message: 'Built.' }); for (let i = 0; i < 20 && r.p.view(r.store.get(c.id)).cost.preview.state !== 'final'; i++) await new Promise((x) => setTimeout(x, 10));
+	assert.equal(r.p.view(r.store.get(c.id)).cost.preview.state, 'final');
+	rows[0] = { ...rows[0], tin: 9e9 }; await r.p.costRefresh(c.id); assert.equal(r.p.view(r.store.get(c.id)).cost.preview.usd, 9, 'a closed job stops counting');
+	// the full build is a separate job with its own starting reading
+	r.p.switchToFull(c.id); r.job.status = 'done'; for (let i = 0; i < 8 && !r.store.get(c.id).prospect.cost.full; i++) await r.p.tick(c.id);
+	assert.ok(r.store.get(c.id).prospect.cost.full.base); assert.equal(r.p.view(r.store.get(c.id)).cost.preview.usd, 9);
+	// delete: the figures stay in the averages
+	await r.p.remove(c.id);
+	const sum = r.p.costSummary(); assert.equal(sum.preview.n, 1); assert.equal(sum.preview.avg, 9); assert.equal(sum.total, 9);
+});
+
+test('AI cost: if the gateway cannot give a reading the build still runs and the screen says why', async () => {
+	const gw = { available: () => true, usageDetail: async () => { throw new Error('Gateway: the live gateway does not have the usage-detail endpoint yet: deploy the new cwai-gateway.zip'); } };
+	const r = rig({ cwai: true, gw }); const c = await make(r); r.p.start(c.id);
+	r.job.status = 'done'; for (let i = 0; i < 8 && !r.store.get(c.id).run.buildStartedAt; i++) await r.p.tick(c.id);
+	assert.ok(r.store.get(c.id).run.buildStartedAt, 'the build started anyway');
+	const v = r.p.view(r.store.get(c.id)).cost; assert.equal(v.preview.state, 'unavailable'); assert.match(v.preview.note, /deploy the new cwai-gateway\.zip/);
+	const q = rig(); const cc = await make(q); assert.equal(q.p.view(q.store.get(cc.id)).cost.tracked, false, 'without a gateway key nothing is tracked');
 });
