@@ -24,10 +24,10 @@ function rig({ cwai = false, hostFails = false, autoDelete = false, golive = fal
 	const calls = { fix: [], enqueue: [] };
 	const loginResult = { code: 0, out: 'Success: hi\nhttps://grace-united-church.churchwebglobal.com/?cwai_login=' + 'a'.repeat(64) + '\n', err: '' };
 	const engine = {
-		STAGES: [{ key: 'preview', reqs: [{ id: 'a', label: 'a', fix: true }, { id: 'b', label: 'b', fix: true }, { id: 'c', label: 'c', fix: true }, { id: 'oxygen', label: 'Oxygen', manual: true }] }],
+		STAGES: [{ key: 'preview', reqs: [{ id: 'dns', label: 'dns', fix: true }, { id: 'a', label: 'a', fix: true }, { id: 'b', label: 'b', fix: true }, { id: 'c', label: 'c', fix: true }, { id: 'oxygen', label: 'Oxygen', manual: true }] }],
 		reqsFor: (s) => s.reqs, isSatisfied: (x) => OK.has(x),
-		testStage: async (ctx, ch) => ({ a: { state: st.a }, b: { state: st.b }, c: { state: st.c }, oxygen: { state: ch.stages?.preview?.manual?.oxygen ? 'ok' : 'no' } }),
-		fixReq: async (ctx, ch, stage, q) => { calls.fix.push(q.id); if (hostFails) return { ok: false, detail: 'Hostinger said no' }; st[q.id] = 'ok'; return { ok: true, detail: 'done' }; },
+		testStage: async (ctx, ch) => ({ dns: { state: 'no' }, a: { state: st.a }, b: { state: st.b }, c: { state: st.c }, oxygen: { state: ch.stages?.preview?.manual?.oxygen ? 'ok' : 'no' } }),
+		fixReq: async (ctx, ch, stage, q) => { if (q.id === 'dns') throw new Error('Cloudflare must not be called'); calls.fix.push(q.id); if (hostFails) return { ok: false, detail: 'Hostinger said no' }; st[q.id] = 'ok'; return { ok: true, detail: 'done' }; },
 		applyOxygenLicense: async () => ({ state: 'ok', detail: 'Added the Oxygen licence key to the site.' }),
 		runWp: async (ctx, ch, args) => { wp.push(args); if (/portal-login/.test(args)) return loginResult; return /^help cwai portal-build/.test(args) ? { code: cwai ? 0 : 1, out: '', err: '' } : { code: 0, out: '', err: '' }; },
 		runWpBackground: async (ctx, ch, args) => { bg.push(args); return { code: 0, out: 'started', err: '' }; },

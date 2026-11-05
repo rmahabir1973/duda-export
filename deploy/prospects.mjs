@@ -19,6 +19,9 @@ const BUILD_SILENCE_MS = 25 * 60000; // the build stopped reporting
 const DOC_EXT = /\.(txt|md|csv|html?|rtf|pdf|docx?|odt|xlsx?)$/i;
 const MAX_DOC = 10 * 1048576;
 const EXTEND_DAYS = 7;
+// A preview lives on *.churchwebglobal.com, which already resolves through the wildcard record, so the portal never touches DNS for it. DNS comes back at go-live.
+const SKIP_REQS = new Set(['dns']);
+const needed = (engine, stage, ch) => engine.reqsFor(stage, ch).filter((q) => !SKIP_REQS.has(q.id));
 
 /** What the screen says while each preview-site step is being done. */
 const DOING = {
@@ -117,15 +120,15 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 		for (let guard = 0; guard < 24; guard++) {
 			const cur = store.get(ch.id), ctx = ctxFor();
 			const results = await engine.testStage(ctx, cur, stage);
-			const reqs = engine.reqsFor(stage, cur).filter((q) => !q.manual);
+			const reqs = needed(engine, stage, cur).filter((q) => !q.manual);
 			const total = reqs.length + 1, done = reqs.filter((q) => engine.isSatisfied(results[q.id]?.state)).length;
-			const saveResults = (extra = {}) => store.update(ch.id, (c) => { const st = (c.stages.preview ||= {}); st.results = { ...results, ...extra }; st.at = now(); st.done = engine.reqsFor(stage, c).every((q) => engine.isSatisfied(st.results[q.id]?.state)); });
+			const saveResults = (extra = {}) => store.update(ch.id, (c) => { const st = (c.stages.preview ||= {}); st.results = { ...results, ...extra }; st.at = now(); st.done = needed(engine, stage, c).every((q) => engine.isSatisfied(st.results[q.id]?.state)); });
 			const next = reqs.find((q) => !engine.isSatisfied(results[q.id]?.state) && results[q.id]?.state !== 'blocked');
 			if (!next) {
 				// everything else is in place: the Oxygen licence, then we are done
 				const lic = await engine.applyOxygenLicense(ctx, cur);
 				if (lic.state !== 'ok') { saveResults(); setStep(ch.id, 'site', { state: 'failed', message: plain(lic.detail), pct: Math.round(100 * done / total) }, { state: 'failed' }); await tell(cur, `Site setup stopped: ${cur.name}`, plain(lic.detail), true); return true; }
-				store.update(ch.id, (c) => { const st = (c.stages.preview ||= {}); (st.manual ||= {}).oxygen = true; st.results = { ...results, oxygen: { state: 'ok', detail: lic.detail } }; st.at = now(); st.done = engine.reqsFor(stage, c).every((q) => engine.isSatisfied(st.results[q.id]?.state)); c.prospect.siteReadyAt = now(); c.prospect.expiresAt = now() + PREVIEW_DAYS * DAY; });
+				store.update(ch.id, (c) => { const st = (c.stages.preview ||= {}); (st.manual ||= {}).oxygen = true; st.results = { ...results, oxygen: { state: 'ok', detail: lic.detail } }; st.at = now(); st.done = needed(engine, stage, c).every((q) => engine.isSatisfied(st.results[q.id]?.state)); c.prospect.siteReadyAt = now(); c.prospect.expiresAt = now() + PREVIEW_DAYS * DAY; });
 				setStep(ch.id, 'site', { state: 'done', message: `The preview site is ready at ${previewHost(cur)}.`, pct: 100 });
 				note(ch.id, 'Preview site created');
 				return true;
