@@ -9,7 +9,7 @@ const api = async (path, opts = {}) => {
 	return j;
 };
 const fmtDate = (t) => t ? new Date(t).toLocaleDateString('en-CA', { year: 'numeric', month: 'short', day: 'numeric' }) : '';
-let rows = [], open = new Set(), plans = {}, confirmBack = null, tests = {}, drafts = {}, busy = {}, notes = {};
+let rmConfirm = null, rows = [], open = new Set(), plans = {}, confirmBack = null, tests = {}, drafts = {}, busy = {}, notes = {};
 const ACTION = { create: ['Add', 'ok'], keep: ['Already there', 'muted'], copy: ['Copy over', 'info'], replace: ['Replaces old', 'warn'], later: ['Added later', 'info'] };
 
 function planHtml(id) {
@@ -19,9 +19,9 @@ function planHtml(id) {
 	const c = p.counts || {};
 	const head = [!p.cloudflare ? '<div class="hint bad">Cloudflare isn\'t connected on this server, so the plan is a preview only.</div>' : '', !p.hostingerIp ? '<div class="hint bad">HOSTINGER_IP isn\'t set on this server, so the website records can\'t be planned.</div>' : '',
 		p.zone ? `<div class="hint">The domain is in our Cloudflare (${esc(p.zoneStatus)}). ${p.nameservers.length ? 'Nameservers: <code>' + p.nameservers.map(esc).join('</code> and <code>') + '</code>' : ''}</div>` : `<div class="hint">The domain isn't in our Cloudflare yet. ${p.copiedFromPublic ? `${p.copiedFromPublic} records found in their current DNS will be copied.` : 'No records were found in their current DNS.'}</div>`].join('');
-	const lines = p.lines.map((l) => { const [w, cls] = ACTION[l.action] || [l.action, '']; return `<tr class="${cls}"><td><span class="chip ${cls}">${w}</span></td><td>${esc(l.type)}</td><td class="mono">${esc(l.name)}</td><td class="mono">${esc(l.content)}${l.priority != null ? ' <small>priority ' + esc(l.priority) + '</small>' : ''}${l.was ? `<small>was ${esc(l.was)}</small>` : ''}</td><td>${l.type === 'MX' || l.type === 'TXT' ? '' : l.proxy ? 'Proxied <small>(after the certificate)</small>' : 'DNS only'}</td><td><small>${esc(l.note || '')}</small></td></tr>`; }).join('');
+	const lines = p.lines.map((l) => { const [w, cls] = ACTION[l.action] || [l.action, '']; return `<tr class="${cls}"><td><span class="chip ${cls}">${w}</span></td><td>${esc(l.type)}</td><td class="mono">${esc(l.name)}</td><td class="mono">${esc(l.content)}${l.priority != null ? ' <small>priority ' + esc(l.priority) + '</small>' : ''}${l.was ? `<small>was ${esc(l.was)}</small>` : ''}</td><td>${l.type === 'MX' || l.type === 'TXT' ? '' : l.proxy ? 'Proxied <small>(after the certificate)</small>' : 'DNS only'}</td><td><small>${esc(l.note || '')}</small>${l.removable && l.id && p.zone ? (rmConfirm === l.id ? ` <button class="sm danger" data-rm2="${l.id}" data-cust="${id}">Yes, remove</button> <button class="sm" data-rmno="1">Cancel</button>` : ` <button class="sm" data-rm="${l.id}">Remove</button>`) : ''}</td></tr>`; }).join('');
 	return `${head}<div class="pr-tablewrap"><table class="pr-table cu-plan"><thead><tr><th></th><th>Type</th><th>Name</th><th>Points to</th><th>Cloudflare</th><th></th></tr></thead><tbody>${lines}</tbody></table></div>
-		<div class="hint">${c.create || 0} to add, ${c.copy || 0} to copy, ${c.replace || 0} replaced, ${c.later || 0} switched on later, ${c.keep || 0} already in place. Nothing has been changed yet.</div>`;
+		<div class="hint">${c.create || 0} to add, ${c.copy || 0} to copy, ${c.replace || 0} replaced, ${c.later || 0} switched on later, ${c.keep || 0} already in place.${p.zone ? '' : ' Nothing has been changed yet.'}</div>`;
 }
 function settingsHtml(c) {
 	return `<div class="cu-set" data-for="${c.id}">
@@ -49,12 +49,19 @@ function dnsActionsHtml(c) {
 		<div class="hint">${t.ok ? 'Everything checked is in place.' : 'Some checks are not in place yet. That is normal until the church has switched its nameservers.'}</div>` : '';
 	return `<h4>DNS</h4><div class="hint">Setting up DNS only adds records in our Cloudflare. Nothing changes for the church until they switch their nameservers.</div>${setup}${note}${sent}${form}${res}`;
 }
+function emailCell(c) {
+	if (!c.email) return 'Not with us';
+	const e = c.emailSetup || {}, ok = (k) => e[k] && e[k].items.length && e[k].items.every((i) => ['ok', 'info'].includes(i.state));
+	const steps = [['create', 'Mailboxes'], ['postmark', 'Postmark'], ['health', 'Checked']];
+	return `With us<small>${steps.map(([k, w]) => `${ok(k) ? '✓' : '·'} ${w}`).join('  ')}</small>`;
+}
+function costCell(c) { const k = c.cost; if (!k) return '<small>—</small>'; const v = k.total ? k.total.usd : (k.preview?.usd || 0) + (k.full?.usd || 0); return v > 0 ? '$' + v.toFixed(2) : '<small>—</small>'; }
 function row(c) {
 	const isOpen = open.has(c.id);
 	return `<tr data-id="${c.id}"><td class="c-name"><b>${esc(c.name)}</b><small>${esc(c.domain)}</small></td>
-		<td>${c.dns === 'ours' ? 'We manage' : 'Church manages'}</td><td>${c.email ? 'With us' : 'Not with us'}</td><td><small>${esc(c.contactEmail || '—')}</small></td><td>${fmtDate(c.since)}</td>
+		<td>${c.dns === 'ours' ? 'We manage' : 'Church manages'}</td><td>${emailCell(c)}</td><td>${c.live ? '<span class="chip ok">Live</span>' : c.mode === 'full' ? 'Full site' : 'Preview'}</td><td>${costCell(c)}</td><td><small>${esc(c.contactEmail || '—')}</small></td><td>${fmtDate(c.since)}</td>
 		<td class="c-act"><button class="sm${isOpen ? '' : ' primary'}" data-open="${c.id}">${isOpen ? 'Hide' : 'DNS plan'}</button>${c.previewUrl ? ` <a class="btn sm" href="${esc(c.previewUrl)}" target="_blank" rel="noopener">Preview</a>` : ''}</td></tr>
-		${isOpen ? `<tr class="drow"><td colspan="6">${settingsHtml(c)}<h4>DNS plan</h4>${planHtml(c.id)}${actionsHtml(c)}</td></tr>` : ''}`;
+		${isOpen ? `<tr class="drow"><td colspan="8">${settingsHtml(c)}<h4>DNS plan</h4>${planHtml(c.id)}${actionsHtml(c)}</td></tr>` : ''}`;
 }
 function render() {
 	$('cTable').hidden = !rows.length; $('cEmpty').hidden = rows.length > 0;
@@ -93,13 +100,16 @@ async function act(id, kind, fn) {
 	busy[id] = null; render();
 }
 document.addEventListener('click', async (e) => {
-	const t = e.target.closest('[data-open],[data-save],[data-back],[data-back2],[data-backno],[data-setup],[data-fullsite],[data-golive],[data-draft],[data-test],[data-sendns],[data-closens]'); if (!t) return;
+	const t = e.target.closest('[data-open],[data-save],[data-back],[data-back2],[data-backno],[data-setup],[data-rm],[data-rm2],[data-rmno],[data-fullsite],[data-golive],[data-draft],[data-test],[data-sendns],[data-closens]'); if (!t) return;
 	const d = t.dataset;
 	if (d.setup) return act(d.setup, 'setup', async () => {
 		const r = await api(`/api/customers/${d.setup}/dns/setup`, { method: 'POST', body: '{}' });
 		notes[d.setup] = { bad: r.errors.length > 0, html: `${r.created ? 'Added the domain to Cloudflare. ' : ''}${r.done.length} records written${r.errors.length ? `, ${r.errors.length} failed: ${r.errors.map(esc).join('; ')}` : ''}.${r.flagged.length ? ' Needs a person: ' + r.flagged.map(esc).join('; ') : ''}${r.nameservers.length ? ' Nameservers: <code>' + r.nameservers.map(esc).join('</code> and <code>') + '</code>' : ''}` };
 		await load(); loadPlan(d.setup);
 	});
+	if (d.rmno) { rmConfirm = null; return render(); }
+	if (d.rm) { rmConfirm = d.rm; return render(); }
+	if (d.rm2) { const id = d.cust; rmConfirm = null; return act(id, 'rm', async () => { const r = await api(`/api/customers/${id}/dns/delete`, { method: 'POST', body: JSON.stringify({ recordId: d.rm2 }) }); notes[id] = { html: `Removed ${esc(r.removed)}.` }; await loadPlan(id); }); }
 	if (d.fullsite) return act(d.fullsite, 'full', async () => { await api(`/api/customers/${d.fullsite}/full`, { method: 'POST', body: '{}' }); notes[d.fullsite] = { html: 'The full site build has started. Follow it on the Prospects page.' }; await load(); });
 	if (d.golive) return act(d.golive, 'golive', async () => { await api(`/api/customers/${d.golive}/golive`, { method: 'POST', body: '{}' }); await load(); });
 	if (d.draft) return act(d.draft, 'draft', async () => { drafts[d.draft] = await api(`/api/customers/${d.draft}/ns-email`); });

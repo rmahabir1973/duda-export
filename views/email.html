@@ -6,6 +6,8 @@
 <main>
   <section class="card">
     <h2>1. Create the church's email</h2>
+    <label for="cust">Customer</label><select id="cust"><option value="">Choose a customer…</option></select>
+    <p class="hint">Picking a customer fills in the domain and shows what has already been done for them. You can also type any domain.</p>
     <div class="row3" style="grid-template-columns:1fr 1fr">
       <div><label for="domain">Church domain</label><input id="domain" type="text" placeholder="britanniaunited.ca" autocomplete="off"></div>
       <div><label for="pw">Default password for the new mailboxes</label><input id="pw" type="password" autocomplete="new-password" placeholder="12+ characters: Aa1!"><p class="hint">Shown to no one and not saved. Tell each person to change it at first login.</p></div>

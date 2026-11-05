@@ -105,6 +105,17 @@ export async function customerDnsSetup(ctx, ch) {
 	return { created, zoneStatus: z.status || '', nameservers: z.name_servers || p.nameservers || [], done, flagged, errors };
 }
 
+/** Remove one record from the church's zone. Only records the plan marks as removable (old mail routes, strays, extras) can go: the website and mail records can't be deleted from here. */
+export async function customerDnsDelete(ctx, ch, recordId) {
+	const cf = ctx.c.cloudflare, z = await zoneOf(ctx, ch.domain);
+	if (!z) throw new Error('The domain isn\'t in our Cloudflare.');
+	const p = await customerPlan(ctx, ch), line = p.lines.find((l) => l.id === recordId);
+	if (!line) throw new Error('That record isn\'t in the zone any more. Refresh the plan.');
+	if (!line.removable) throw new Error('That record is part of the standard set, so it can\'t be removed here.');
+	await cf.deleteRecord(z.id, recordId); ctx.memo = {};
+	return { removed: `${line.type} ${line.name} → ${line.content}` };
+}
+
 /** Does the world see what we planned? Looks only. Each check is ok, no, warn or info (informational). */
 export async function customerTest(ctx, ch) {
 	const p = await customerPlan(ctx, ch), dns = ctx.c.dns, d = ch.domain, checks = [];

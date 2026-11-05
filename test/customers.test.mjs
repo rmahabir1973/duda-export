@@ -155,3 +155,26 @@ test('go-live and full site: run through the engine, remember the result, and ma
 	const v = cu.view(c); assert.equal(v.live, true); assert.equal(v.cost.total.usd, 1.5); assert.ok(v.history.some((h) => /Live on a\.ca/.test(h.text)));
 	assert.throws(() => cu.revert('abc'), /live/);
 });
+
+test('plan: in a zone that already exists, old mail routes and unknown records are listed as removable; the standard records are not', () => {
+	const existing = [
+		{ id: 'a1', type: 'A', name: 'carlisleuc.ca', content: '1.2.3.4' }, { id: 'c1', type: 'CNAME', name: 'www.carlisleuc.ca', content: 'carlisleuc.ca' },
+		{ id: 'm1', type: 'MX', name: 'carlisleuc.ca', content: 'mail.carlisleuc.ca', priority: 10 }, { id: 'm2', type: 'MX', name: 'carlisleuc.ca', content: 'eforward1.registrar-servers.com', priority: 10 },
+		{ id: 't1', type: 'TXT', name: 'carlisleuc.ca', content: 'google-site-verification=abc' }, { id: 'n1', type: 'NS', name: 'carlisleuc.ca', content: 'x.ns.cloudflare.com' },
+	];
+	const lines = buildDnsPlan({ ...base, email: true, existing });
+	const rm = lines.filter((l) => l.removable).map((l) => l.id).sort();
+	assert.deepEqual(rm, ['m2', 't1']);
+	assert.equal(find(lines, 'MX', 'carlisleuc.ca').find((l) => l.content === 'mail.carlisleuc.ca').removable, undefined);
+	assert.ok(!lines.some((l) => l.type === 'NS'));
+});
+
+test('delete: goes through the engine and is logged', async () => {
+	const store = createStore(fs.mkdtempSync(path.join(os.tmpdir(), 'cust-')));
+	const engine = { customerPlan: async () => ({}), customerDnsDelete: async (ctx, ch, id) => ({ removed: 'MX ' + id }) };
+	const cu = createCustomers({ store, ctxFor: () => ({ c: { cfg: { previewDomain: 'x.com' } } }), engine });
+	store.create({ name: 'A Church', slug: 'abc', domain: 'a.ca' }); store.update('abc', (c) => { c.prospect = { domain: 'a.ca', createdAt: 1 }; c.run = { state: 'done' }; });
+	cu.convert('abc', { domain: 'a.ca', dns: 'ours' }, 'ryan');
+	await cu.dnsDelete('abc', 'm2', 'ryan');
+	assert.ok(store.get('abc').log.some((l) => /removed: MX m2/.test(l.text)));
+});

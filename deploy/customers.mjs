@@ -109,6 +109,11 @@ ChurchWeb Support`;
 		store.log(id, by, r.live ? `Live on ${ch.domain}` : `Go-live pass: ${r.items.filter((i) => i.state === 'ok').length} of ${r.items.length} checks fine`);
 		return r;
 	}
+	async function dnsDelete(id, recordId, by = '') {
+		const ch = store.get(id); if (!ch?.customer) throw new Error('Not a customer.');
+		const r = await engine.customerDnsDelete(ctxFor(), ch, String(recordId || ''));
+		store.log(id, by, `DNS record removed: ${r.removed}`); return r;
+	}
 	async function test(id) {
 		const ch = store.get(id); if (!ch?.customer) throw new Error('Not a customer.');
 		return engine.customerTest(ctxFor(), ch);
@@ -127,8 +132,9 @@ ChurchWeb Support`;
 		r.post('/:id/ns-email/send', wrap(async (req, res) => res.json(await nsEmailSend(req.params.id, req.body || {}, req.by))));
 		r.post('/:id/full', wrap(async (req, res) => res.json(await full(req.params.id, req.by))));
 		r.post('/:id/golive', wrap(async (req, res) => res.json(await golive(req.params.id, req.by))));
+		r.post('/:id/dns/delete', wrap(async (req, res) => res.json(await dnsDelete(req.params.id, (req.body || {}).recordId, req.by))));
 		r.get('/:id/test', wrap(async (req, res) => res.json(await test(req.params.id))));
 		return r;
 	}
-	return { full, golive, setup, nsEmail, nsEmailSend, test, convert, save, revert, plan, list, view, router };
+	return { dnsDelete, full, golive, setup, nsEmail, nsEmailSend, test, convert, save, revert, plan, list, view, router };
 }
