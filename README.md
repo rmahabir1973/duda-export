@@ -272,3 +272,4 @@ Portal callback endpoints (no sign-in, signed token per church): `/api/build/:id
 - **Reading documents.** Word (.docx), Excel (.xlsx), OpenDocument (.odt/.ods), PDF, RTF, text, CSV and HTML are read into the AI's brief (up to 30,000 characters in total, 12,000 per file). Old .doc/.xls files and scanned (picture-only) PDFs can't be read; the file list says so, and the AI is only told the file name. Pure JavaScript (fflate, unpdf), nothing extra to install on Railway.
 - The old checklist screen (/deploy) is retired: it redirects to Prospects, and the Details toggle is gone; every church always shows its stages.
 - Preview sites never touch DNS: *.churchwebglobal.com resolves through the wildcard, so the Create site step skips the DNS check and Cloudflare is not called. DNS is for go-live only.
+- The Hostinger plugins are now removed as the last step, after the build (it never holds up the run; if it fails it's noted under the church's details).

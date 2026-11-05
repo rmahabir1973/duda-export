@@ -20,7 +20,9 @@ const DOC_EXT = /\.(txt|md|csv|html?|rtf|pdf|docx?|odt|xlsx?)$/i;
 const MAX_DOC = 10 * 1048576;
 const EXTEND_DAYS = 7;
 // A preview lives on *.churchwebglobal.com, which already resolves through the wildcard record, so the portal never touches DNS for it. DNS comes back at go-live.
-const SKIP_REQS = new Set(['dns']);
+// The Hostinger plugins are removed last, after the build, because removing them first stalled on some sites.
+const SKIP_REQS = new Set(['dns', 'hostingerPlugins']);
+const CLEANUP_MS = 5 * 60000;
 const needed = (engine, stage, ch) => engine.reqsFor(stage, ch).filter((q) => !SKIP_REQS.has(q.id));
 
 /** What the screen says while each preview-site step is being done. */
@@ -188,6 +190,23 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 		return true;
 	}
 
+	/** After the site is built: deactivate and delete Hostinger's own plugins. It never holds anything up: a failure is only noted. */
+	async function cleanup(id) {
+		const ch = store.get(id); if (!ch?.run || ch.run.cleanup || ch.run.steps.build.state !== 'done') return;
+		patch(id, (r) => { r.cleanup = { state: 'working', message: 'Removing the Hostinger plugins…', at: now() }; });
+		const stage = engine.STAGES.find((x) => x.key === 'preview'), req = engine.reqsFor(stage, ch).find((q) => q.id === 'hostingerPlugins');
+		let out;
+		try {
+			if (!req) out = { ok: true, detail: 'Nothing to remove.' };
+			else out = await Promise.race([engine.fixReq(ctxFor(), store.get(id) || ch, stage, req, {}), new Promise((res) => setTimeout(() => res({ ok: false, detail: 'It took too long. Remove them by hand in WordPress → Plugins.' }), CLEANUP_MS).unref())]);
+		} catch (e) { out = { ok: false, detail: e.message }; }
+		if (!store.get(id)) return;
+		patch(id, (r) => { r.cleanup = { state: out.ok ? 'done' : 'failed', message: plain(out.detail || ''), at: now() }; });
+		note(id, `Hostinger plugins: ${out.ok ? 'removed' : 'could not remove (' + clip(out.detail, 120) + ')'}`, out.ok ? 'info' : 'warn');
+	}
+	const cleaning = new Set();
+	const runCleanup = (id) => { if (cleaning.has(id)) return; cleaning.add(id); cleanup(id).catch((e) => log('prospects cleanup:', e.message)).finally(() => cleaning.delete(id)); };
+
 	/* ------------------------------------------------------------ the runner */
 	async function tick(id) {
 		if (busy.has(id)) return;
@@ -207,7 +226,7 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 			try { patch(id, (r) => { r.state = 'failed'; const k = ['export', 'site', 'build'].find((s) => r.steps[s].state !== 'done'); if (k) r.steps[k] = { ...r.steps[k], state: 'failed', message: plain(e.message) }; }); } catch { /* record gone */ }
 		} finally { busy.delete(id); }
 	}
-	const tickAll = async () => { for (const c of store.list()) if (c.run?.state === 'running') await tick(c.id); };
+	const tickAll = async () => { for (const c of store.list()) { if (c.run?.state === 'running') await tick(c.id); else if (c.run?.state === 'done' && !c.run.cleanup) runCleanup(c.id); } };
 
 	/** Start (or restart after a failure, or resume) a church's run. Finished steps are never redone. */
 	function start(id) {
@@ -238,6 +257,7 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 		});
 		const after = store.get(id), s = after.run.steps.build;
 		if (s.state === 'needs_input') tell(after, `Your answer is needed: ${after.name}`, `The AI building ${after.name} has a question:\n\n${s.question.text}\n\nAnswer it in the portal: ${baseUrl}/prospects`);
+		if (s.state === 'done') runCleanup(id);
 		if (s.state === 'done') tell(after, `Preview ready: ${after.name}`, `The preview for ${after.name} is ready:\nhttps://${previewHost(after)}\n\nIt will be deleted on ${new Date(after.prospect.expiresAt).toISOString().slice(0, 10)} unless you keep it.`);
 		if (s.state === 'failed') tell(after, `Build failed: ${after.name}`, s.message, true);
 		return after;
@@ -321,6 +341,7 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 			canFull: p.mode !== 'full' && s.build.state === 'done' && run.state === 'done',
 			canLogin: s.site.state === 'done',
 			canDelete: !ch.stages?.golive?.done,
+			tidy: run.cleanup ? { state: run.cleanup.state, message: run.cleanup.message } : null,
 		};
 	}
 
@@ -451,5 +472,5 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 	};
 	const stopTimers = () => { for (const t of timers) { clearInterval(t); clearTimeout(t); } timers = []; };
 
-	return { create, detect, start, tick, tickAll, reportBuild, answer, addDoc, removeDoc, keep, extend, remove, switchToFull, adminLink, sweep, view, router, buildRouter, sign, verify, startTimers, stopTimers, briefFor };
+	return { create, detect, start, tick, tickAll, reportBuild, answer, cleanup, addDoc, removeDoc, keep, extend, remove, switchToFull, adminLink, sweep, view, router, buildRouter, sign, verify, startTimers, stopTimers, briefFor };
 }

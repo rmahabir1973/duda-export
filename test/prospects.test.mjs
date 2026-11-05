@@ -24,10 +24,10 @@ function rig({ cwai = false, hostFails = false, autoDelete = false, golive = fal
 	const calls = { fix: [], enqueue: [] };
 	const loginResult = { code: 0, out: 'Success: hi\nhttps://grace-united-church.churchwebglobal.com/?cwai_login=' + 'a'.repeat(64) + '\n', err: '' };
 	const engine = {
-		STAGES: [{ key: 'preview', reqs: [{ id: 'dns', label: 'dns', fix: true }, { id: 'a', label: 'a', fix: true }, { id: 'b', label: 'b', fix: true }, { id: 'c', label: 'c', fix: true }, { id: 'oxygen', label: 'Oxygen', manual: true }] }],
+		STAGES: [{ key: 'preview', reqs: [{ id: 'dns', label: 'dns', fix: true }, { id: 'hostingerPlugins', label: 'hp', fix: true }, { id: 'a', label: 'a', fix: true }, { id: 'b', label: 'b', fix: true }, { id: 'c', label: 'c', fix: true }, { id: 'oxygen', label: 'Oxygen', manual: true }] }],
 		reqsFor: (s) => s.reqs, isSatisfied: (x) => OK.has(x),
-		testStage: async (ctx, ch) => ({ dns: { state: 'no' }, a: { state: st.a }, b: { state: st.b }, c: { state: st.c }, oxygen: { state: ch.stages?.preview?.manual?.oxygen ? 'ok' : 'no' } }),
-		fixReq: async (ctx, ch, stage, q) => { if (q.id === 'dns') throw new Error('Cloudflare must not be called'); calls.fix.push(q.id); if (hostFails) return { ok: false, detail: 'Hostinger said no' }; st[q.id] = 'ok'; return { ok: true, detail: 'done' }; },
+		testStage: async (ctx, ch) => ({ dns: { state: 'no' }, hostingerPlugins: { state: 'no' }, a: { state: st.a }, b: { state: st.b }, c: { state: st.c }, oxygen: { state: ch.stages?.preview?.manual?.oxygen ? 'ok' : 'no' } }),
+		fixReq: async (ctx, ch, stage, q) => { if (q.id === 'dns') throw new Error('Cloudflare must not be called'); if (q.id === 'hostingerPlugins') { calls.cleanup = (calls.cleanup || 0) + 1; return { ok: true, detail: 'Removed 3 Hostinger plugin(s).' }; } calls.fix.push(q.id); if (hostFails) return { ok: false, detail: 'Hostinger said no' }; st[q.id] = 'ok'; return { ok: true, detail: 'done' }; },
 		applyOxygenLicense: async () => ({ state: 'ok', detail: 'Added the Oxygen licence key to the site.' }),
 		runWp: async (ctx, ch, args) => { wp.push(args); if (/portal-login/.test(args)) return loginResult; return /^help cwai portal-build/.test(args) ? { code: cwai ? 0 : 1, out: '', err: '' } : { code: 0, out: '', err: '' }; },
 		runWpBackground: async (ctx, ch, args) => { bg.push(args); return { code: 0, out: 'started', err: '' }; },
@@ -263,4 +263,15 @@ test('one-click WP-Admin link: asks the site for it, only accepts a link for tha
 	r.loginResult.code = 1; r.loginResult.out = ''; r.loginResult.err = "Error: 'portal-login' is not a registered wp command.";
 	await assert.rejects(() => r.p.adminLink(c.id), /1\.12\.0/);
 	const n = rig(); const d = await make(n); await assert.rejects(() => n.p.adminLink(d.id), /not ready/);
+});
+
+test('Hostinger plugins are removed last, after the build, and never hold the run up', async () => {
+	const r = rig({ cwai: true }); const c = await make(r); r.p.start(c.id);
+	r.job.status = 'done'; for (let i = 0; i < 4; i++) await r.p.tick(c.id);
+	assert.equal(r.calls.cleanup, undefined, 'not removed while the site is being built');
+	assert.equal(r.store.get(c.id).run.steps.site.state, 'done');
+	r.p.reportBuild(c.id, { state: 'done', message: 'Built.' });
+	await new Promise((x) => setTimeout(x, 20));
+	assert.equal(r.calls.cleanup, 1); assert.equal(r.store.get(c.id).run.cleanup.state, 'done'); assert.equal(r.store.get(c.id).run.state, 'done');
+	await r.p.tickAll(); assert.equal(r.calls.cleanup, 1, 'only once');
 });
