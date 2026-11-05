@@ -203,3 +203,4 @@ a.btn, button.sm2 { display: inline-block; background: var(--p); color: #fff; bo
 .pr-docs{margin:6px 0;padding-left:18px}.pr-docs li.bad{color:#a02a1c}.pr-docs small{color:#6b7686}
 button[disabled]{opacity:.5;cursor:not-allowed}
 .pr-bar input{padding:8px 11px;border:1px solid #cfd4da;border-radius:7px;font:inherit;background:#fff}
+.c-cost .cost{margin-bottom:4px}.c-cost .cost b{display:block;font-size:1.05rem}.c-cost small{display:block;color:#5b6675}.cost-note{color:#7a5a00}

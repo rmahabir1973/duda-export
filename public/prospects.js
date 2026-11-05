@@ -10,7 +10,7 @@ const api = async (path, opts = {}) => {
 };
 const ICON = { done: '✔', working: '●', failed: '!', needs_input: '?', blocked: '⏸', waiting: '○' };
 const WORDS = { done: 'Done', working: 'Working', failed: 'Stopped', needs_input: 'Needs you', blocked: 'Waiting', waiting: '' };
-let seen = false, rows = [], me = null, openCards = new Set(), confirmDel = null, confirmFull = null, confirmRestart = null, answers = {}, adminShown = {}, timer = null, typing = false;
+let seen = false, rows = [], costs = null, me = null, openCards = new Set(), confirmDel = null, confirmFull = null, confirmRestart = null, answers = {}, adminShown = {}, timer = null, typing = false;
 
 const stageHtml = (s) => `<li class="st ${s.state}" title="${esc(s.message || '')}"><span class="ic">${ICON[s.state] || '○'}</span><span class="tt">${esc(s.title)}</span>${WORDS[s.state] ? `<small>${WORDS[s.state]}</small>` : ''}</li>`;
 const fmtDate = (t) => t ? new Date(t).toLocaleDateString('en-CA', { year: 'numeric', month: 'short', day: 'numeric' }) : '';
@@ -23,6 +23,22 @@ function daysCell(c) {
 	if (!c.previewUrl || c.daysLeft == null) return '<span class="hint">—</span>';
 	const n = c.daysLeft, cls = n <= 2 ? 'bad' : n <= 7 ? 'soon' : 'ok';
 	return `<span class="days ${cls}"><b>${n > 0 ? n : 0}</b> day${n === 1 ? '' : 's'}</span><small>${n > 0 ? 'until deleted' : 'past its 30 days'}</small>`;
+}
+const usd = (n) => '$' + Number(n || 0).toFixed(2);
+const big = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n || 0);
+function costCell(c) {
+	const k = c.cost; if (!k) return '<span class="hint">—</span>';
+	const part = (label, e) => !e ? '' : e.state === 'unavailable' ? `<div class="cost"><small class="cost-note" title="${esc(e.note)}">${label}: no reading</small></div>` : `<div class="cost"><b>${usd(e.usd)}</b><small>${label}${e.state === 'running' ? ' · so far' : ''}${e.estimated ? ' · estimate' : ''}</small></div>`;
+	return part('preview', k.preview) + part('full site', k.full) || (k.tracked ? '<span class="hint">—</span>' : '<small>Not tracked</small>');
+}
+function costDetail(c) {
+	const k = c.cost; if (!k) return '';
+	return [['preview', k.preview], ['full site', k.full]].map(([label, e]) => {
+		if (!e) return '';
+		if (e.state === 'unavailable') return `<div class="hint cost-note">AI cost for the ${label}: not measured. ${esc(e.note)}</div>`;
+		const t = e.tokens || {}, m = (e.byModel || []).map((x) => `${esc(x.model.replace('claude-', ''))} ${usd(x.usd)}`).join(', ');
+		return `<div class="hint"><b>AI cost for the ${label}: ${usd(e.usd)}</b>${e.state === 'running' ? ' so far' : ''} · ${e.calls} AI calls · ${big(t.input)} new input, ${big(t.output)} output, ${big(t.cacheWrite)} cache writes, ${big(t.cacheRead)} cache reads${m ? ' · ' + m : ''}${e.estimated ? ' · Haiku is priced at its lower rate, so treat this as a minimum' : ''}</div>`;
+	}).join('');
 }
 function statusCell(c) {
 	const cur = curOf(c), label = c.runState === 'done' ? 'Ready' : needsYou(c) ? 'Needs you' : c.runState === 'failed' ? 'Stopped' : c.runState === 'idle' ? 'Not started' : cur.title;
@@ -53,6 +69,7 @@ function detail(c) {
 		<div class="status ${cur.state}"><span>${esc(c.headline)}</span></div>${bar}${q}${blocked}
 		<div class="pr-det">
 			<div class="hint">Staff login on the preview: <code>churchweb</code> with the standard staff password. ${me?.user?.role === 'admin' && c.previewUrl ? `<a href="#" data-adm="${c.id}">Show admin login</a>` : ''}</div>${adm}
+			${costDetail(c)}
 			${c.tidy && c.tidy.state !== 'done' ? `<div class="hint">Hostinger plugins: ${esc(c.tidy.message)}</div>` : ''}${c.notes ? `<div class="hint"><b>Notes:</b> ${esc(c.notes)}</div>` : ''}${docs}
 			<div class="hint">${c.exported ? `Export: ${c.exported.pages ?? '?'} pages, ${c.exported.images ?? '?'} images. ` : ''}${c.zipReady ? `<a href="/api/prospects/${c.id}/package">Download the ZIP</a>` : ''}</div>
 		</div>`;
@@ -64,13 +81,15 @@ function row(c) {
 		<td><span class="pill">${c.mode === 'full' ? 'FULL SITE' : 'PREVIEW'}</span></td>
 		<td class="c-status">${statusCell(c)}</td>
 		<td class="c-days">${daysCell(c)}</td>
+		<td class="c-cost">${costCell(c)}</td>
 		<td class="c-added">${fmtDate(c.createdAt)}<small>${esc(who(c.createdBy))}</small>${c.exported ? `<small>${c.exported.pages ?? '?'} pages</small>` : ''}</td>
 		<td class="c-act">${actions(c)}</td>
-	</tr>${open ? `<tr class="drow"><td colspan="6">${detail(c)}</td></tr>` : ''}`;
+	</tr>${open ? `<tr class="drow"><td colspan="7">${detail(c)}</td></tr>` : ''}`;
 }
 function summary(list) {
 	const n = (f) => list.filter(f).length;
 	const cells = [['Prospects', list.length], ['Building', n((c) => c.runState === 'running')], ['Need you', n(needsYou)], ['Stopped', n((c) => c.runState === 'failed')], ['Ready', n((c) => c.runState === 'done')], ['Deleted within 7 days', n((c) => c.previewUrl && c.daysLeft != null && c.daysLeft <= 7)]];
+	if (costs && costs.total > 0) cells.push(['AI cost, last 30 days', usd(costs.last30)], ['Average preview', costs.preview.n ? usd(costs.preview.avg) : '—'], ['Average full site', costs.full.n ? usd(costs.full.avg) : '—']);
 	return cells.map(([k, v]) => `<div class="tile${v && (k === 'Need you' || k === 'Stopped' || k.startsWith('Deleted')) ? ' hot' : ''}"><b>${v}</b><span>${k}</span></div>`).join('');
 }
 function render() {
@@ -79,11 +98,11 @@ function render() {
 	const f = $('fFind')?.value.trim().toLowerCase() || '', shown = f ? mine.filter((c) => `${c.name} ${c.domain} ${c.contactEmail}`.toLowerCase().includes(f)) : mine;
 	$('sum').innerHTML = mine.length ? summary(mine) : '';
 	$('dash').hidden = !mine.length;
-	$('rows').innerHTML = shown.map(row).join('') || `<tr><td colspan="6" class="hint">Nothing matches.</td></tr>`;
+	$('rows').innerHTML = shown.map(row).join('') || `<tr><td colspan="7" class="hint">Nothing matches.</td></tr>`;
 	$('empty').hidden = mine.length > 0; if (!mine.length) $('newBox').open = true; else if (!seen) { $('newBox').open = !!new URLSearchParams(location.search).get('url'); } seen = true;
 }
 async function load() {
-	try { rows = await api('/api/prospects'); render(); } catch (e) { $('nErr').textContent = e.message; }
+	try { rows = await api('/api/prospects'); try { costs = await api('/api/prospects/costs'); } catch { /* the tiles just stay away */ } render(); } catch (e) { $('nErr').textContent = e.message; }
 	clearTimeout(timer);
 	timer = setTimeout(load, rows.some((r) => ['running', 'needs_input'].includes(r.runState)) ? 4000 : 30000);
 }
