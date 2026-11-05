@@ -259,6 +259,7 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 			note(ch.id, 'Build waiting for the plugin\'s portal-build command', 'warn');
 			return true;
 		}
+		try { const lic = await engine.applyOxygenLicense(ctx, ch); if (lic.state !== 'ok' && lic.state !== 'unknown') note(ch.id, 'Oxygen licence: ' + plain(lic.detail), 'warn'); } catch { /* the licence never blocks a build */ }
 		await costBase(ch); ch = store.get(ch.id);
 		try { const pushed = await pushFiles(ch); patch(ch.id, (rr) => { rr.pushed = pushed; }); ch = store.get(ch.id); }
 		catch (e) { setStep(ch.id, 'build', { state: 'failed', message: plain(e.message) }, { state: 'failed' }); return true; }
@@ -466,6 +467,14 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 	}
 	const keep = (id) => extend(id, EXTEND_DAYS);
 
+	/** Apply (or confirm) the Oxygen licence on an existing preview. Safe to repeat: a site that is already licensed is left alone. */
+	async function licence(id) {
+		const ch = store.get(id); if (!ch?.prospect) throw new Error('Not a prospect.');
+		const r = await engine.applyOxygenLicense(ctxFor(), ch);
+		note(id, r.state === 'ok' ? 'Oxygen licence checked: ' + plain(r.detail) : 'Oxygen licence: ' + plain(r.detail), r.state === 'ok' ? undefined : 'warn');
+		return { state: r.state, detail: plain(r.detail) };
+	}
+
 	/** Delete the preview site and the church record, from the dashboard. */
 	async function remove(id) {
 		const ch = store.get(id); if (!ch?.prospect) throw new Error('Not a prospect.');
@@ -530,6 +539,7 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 		r.post('/:id/run', wrap(async (req, res) => { if (!pick(req, res)) return; start(req.params.id); tick(req.params.id); res.json(view(store.get(req.params.id))); }));
 		r.post('/:id/answer', wrap(async (req, res) => { if (!pick(req, res)) return; answer(req.params.id, req.body?.questionId, req.body?.answer); res.json(view(store.get(req.params.id))); }));
 		r.post('/:id/keep', wrap(async (req, res) => { if (!pick(req, res)) return; res.json(view(keep(req.params.id))); }));
+		r.post('/:id/license', wrap(async (req, res) => { if (!pick(req, res)) return; res.json(await licence(req.params.id)); }));
 		r.post('/:id/extend', wrap(async (req, res) => { if (!pick(req, res)) return; res.json(view(extend(req.params.id, req.body?.days))); }));
 		r.post('/:id/full', wrap(async (req, res) => { if (!pick(req, res)) return; switchToFull(req.params.id); tick(req.params.id); res.json(view(store.get(req.params.id))); }));
 		r.post('/:id/restart', wrap(async (req, res) => { if (!pick(req, res)) return; await restartBuild(req.params.id); tick(req.params.id); res.json(view(store.get(req.params.id))); }));
@@ -569,5 +579,5 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 	};
 	const stopTimers = () => { for (const t of timers) { clearInterval(t); clearTimeout(t); } timers = []; };
 
-	return { create, detect, start, tick, tickAll, costRefresh, costSummary, reportBuild, answer, cleanup, restartBuild, addDoc, removeDoc, keep, extend, remove, switchToFull, adminLink, sweep, view, router, buildRouter, sign, verify, startTimers, stopTimers, briefFor };
+	return { create, detect, start, tick, tickAll, costRefresh, costSummary, reportBuild, answer, cleanup, restartBuild, addDoc, removeDoc, keep, extend, licence, remove, switchToFull, adminLink, sweep, view, router, buildRouter, sign, verify, startTimers, stopTimers, briefFor };
 }
