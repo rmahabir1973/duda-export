@@ -43,6 +43,7 @@ async function init() {
 	CFG = await api('/config');
 	$('setup').innerHTML = Object.entries(CFG.configured).map(([k, v]) => `<div class="${v ? 'ok' : 'no'}">${v ? '✔' : '✖'} ${esc(SERVICE[k] || k)}${v ? '' : ' — not set up'}</div>`).join('');
 	await loadBoard();
+	const want = new URLSearchParams(location.search).get('church'); if (want) openChurch(want);
 }
 $('newForm').onsubmit = async (e) => {
 	e.preventDefault(); $('nErr').textContent = '';

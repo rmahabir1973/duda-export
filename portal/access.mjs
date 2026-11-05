@@ -31,7 +31,7 @@ export function createAccessGuard({ teamDomain, aud, fetchImpl = globalThis.fetc
 	};
 	const deny = (res) => res.status(403).type('text').send('Access denied');
 	const guard = async (req, res, next) => {
-		if (exempt.includes(req.path)) return next();
+		if (exempt.some((e) => e === req.path || (e.endsWith('/') && req.path.startsWith(e)))) return next();
 		const token = req.get('cf-access-jwt-assertion');
 		if (!token) return deny(res);
 		try {

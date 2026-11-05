@@ -236,3 +236,28 @@ If customers are missing from the board (for example after a redeploy wiped the 
 Two-step secrets are encrypted with `PORTAL_ENC_KEY` (or, when that is not set, `SESSION_SECRET`). The portal now also tries `SESSION_SECRET` and any keys listed in `PORTAL_ENC_KEY_OLD` (comma separated) when it opens a secret, and on a successful sign-in it re-saves the secret under the current key. So adding `PORTAL_ENC_KEY` later, or rotating it, does not break existing sign-ins: put the previous key in `PORTAL_ENC_KEY_OLD` until everyone has signed in once. Recovery codes never depend on the key.
 
 Support follow-up (v7.9): routine registrar messages (autorenew order pending, receipts, order status) are no longer treated as deadlines, so they go to the daily digest instead of being escalated. Escalation emails are limited to 8 per run and only for tickets whose last message is recent; older ones and the overflow stay in the queue and are listed in the daily summary email ("Needing a person"). Admins get a **Sort all open tickets again** button to re-run the sorting after changing the knowledge text or rules.
+
+## Prospects (v8.0)
+
+One screen replaces the Exporter and the Customers checklist for new churches. Menu: **Prospects**.
+
+1. **Add church**: website address (name and platform are found automatically), contact email, Preview (home + 5 key pages) or Full site, optional notes and documents. The "＋ Prospect" button in the Directory pre-fills this.
+2. **Export**: runs the exporter (preview mode for a Preview).
+3. **Create site**: `slug.churchwebglobal.com` on Hostinger, WordPress, our plugins, the AI Assistant key from the gateway, Preview Mode, staff view, team login, and the Oxygen licence. The runner reuses the existing checks and fixes (Details → "Open the full checklist" still shows them) and does them one after another with no Re-check presses.
+4. **Build site**: the portal gives the site signed links to the ZIP and the design brief; the plugin (v1.11.0+) imports the content and images and runs the assistant on its own. If the assistant needs a person it asks inside the portal ("Needs you"); the build resumes when you answer.
+5. **Ready**: preview link. Unconverted previews are deleted 30 days after the site is created (warnings at 7 and 2 days, "Keep longer" adds 30 days).
+
+Settings (Railway):
+- `OXYGEN_LICENSE_KEY` (or `oxygen_license_key`): written into each new site's wp-config.php as `OXYGEN_LICENSE_KEY`. The key is never shown.
+- `PORTAL_URL` (default `https://portal.churchwebglobal.com`): the address the sites call back to.
+- `PROSPECT_ALERT_TO` (default `SUPPORT_ESCALATE_TO`): who is emailed when a run stops. The person who started the run is emailed when it is ready or needs an answer.
+- `PROSPECT_AUTODELETE=on`: really delete expired previews. Off by default: the portal only warns. Live sites and the template are never deleted.
+- `PROSPECTS_RUN=off`: stop the background runner (for a safe deploy).
+- Optional `BUILD_LINK_SECRET`: signs the plugin links (otherwise derived from other secrets). Links last 8 hours and work for one church only.
+
+Plugin bridge (plugin v1.11.0, `includes/class-cwai-portal.php`):
+- `GET /wp-json/cwai/v1/portal/ping` and `/portal/build`: version, capabilities, import and build state. Authenticated with the site's own AI key as a bearer token.
+- `wp cwai portal-build --package=… --brief=… --callback=… --token=… --mode=preview|full` (and `--resume --answer=…`): runs in the background over SSH. The assistant ends a message with `QUESTION:` (optionally `OPTIONS: a | b`) when it needs a person and `DONE:` when finished. It approves its own steps but never deletes.
+- Until the plugin is updated on the template site (build2), the Build stage shows "waiting for the plugin update" with the manual import as a fallback.
+
+Portal callback endpoints (no sign-in, signed token per church): `/api/build/:id/package.zip`, `brief.md`, `docs/:n`, `state`, and `POST status`.

@@ -45,6 +45,40 @@ const wpGet = async (ctx, host, args) => { const r = await wpRun(ctx, host, args
 const hostingerPlugins = async (ctx, h) => { const t = await wpGet(ctx, h, 'plugin list --fields=name,title,status --format=json'); if (t === null) return null; try { return JSON.parse(t).filter((p) => /hostinger/i.test(p.name) || /hostinger/i.test(p.title || '')); } catch { return null; } };
 const handCmd = (ctx, ch, args) => `cd ${sitePath(ctx.c.cfg, tempHost(ch, ctx.c.cfg))} && ${ctx.c.cfg.wpCli} ${args}`;
 
+
+/** Put the Oxygen licence key into the new site's wp-config.php (as the OXYGEN_LICENSE_KEY constant). The key comes from the portal's own settings and is never shown. */
+export async function applyOxygenLicense(ctx, ch) {
+	const key = ctx.c.cfg.oxygenLicense;
+	if (!key) return { state: 'unknown', detail: 'Set OXYGEN_LICENSE_KEY in Railway so new sites can be licensed automatically.' };
+	const s = await siteOf(ctx, ch);
+	if (s.unavailable) return { state: 'unknown', detail: 'Hostinger SSH isn\'t set up on this server yet.' };
+	if (s.missing) return { state: 'no', detail: 'The site doesn\'t exist yet on Hostinger.' };
+	const cur = await wpGet(ctx, s.host, 'config get OXYGEN_LICENSE_KEY');
+	if (cur === key) return { state: 'ok', detail: 'The Oxygen licence key is in place.' };
+	const r = await wpRun(ctx, s.host, `config set OXYGEN_LICENSE_KEY ${shq(key)} --type=constant`);
+	if (r.code) return { state: 'error', detail: (r.err || r.out || '').split(key).join('••••').trim().slice(-300) };
+	return { state: 'ok', detail: 'Added the Oxygen licence key to the site.' };
+}
+
+
+/** Run one WP-CLI command on a church's preview site. Returns { code, out, err } or { unavailable } / { missing }. */
+export async function runWp(ctx, ch, args) {
+	const s = await siteOf(ctx, ch);
+	if (s.unavailable) return { unavailable: true };
+	if (s.missing) return { missing: true };
+	return wpRun(ctx, s.host, args);
+}
+
+/** Start a long WP-CLI command on a church's site and leave it running after the SSH session ends. Output goes to a log file in the account's home folder. */
+export async function runWpBackground(ctx, ch, args, logName = 'job') {
+	const s = await siteOf(ctx, ch);
+	if (s.unavailable) return { unavailable: true };
+	if (s.missing) return { missing: true };
+	const log = `$HOME/cwai-portal-${String(logName).replace(/[^a-z0-9-]/gi, '')}.log`;
+	const r = await ctx.c.ssh.exec(`cd ${sitePath(ctx.c.cfg, s.host)} && (nohup ${ctx.c.cfg.wpCli} ${args} > ${log} 2>&1 < /dev/null &) ; echo started`);
+	return r;
+}
+
 /** Run a test that needs the WordPress folder. */
 async function onSite(ctx, ch, fn) {
 	const s = await siteOf(ctx, ch);
@@ -146,7 +180,7 @@ export const STAGES = [
 					const cfg = ctx.c.cfg, host = tempHost(ch, cfg), email = ch.contactEmail || cfg.wpAdminEmail;
 					if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email || '')) return { ok: false, detail: 'WordPress needs an admin email. Enter the church contact\'s email at the top of this page (or set WP_ADMIN_EMAIL in Railway).' };
 					const w = await siteRecord(ctx, host); if (!w) return { ok: false, detail: 'The site doesn\'t exist on Hostinger yet.' };
-					const password = randomPassword(18), login = 'cwadmin';
+					const password = (ctx.adminPassword && ctx.adminPassword(ch)) || randomPassword(18), login = 'cwadmin';
 					await ctx.c.hostinger.installWordPress(w.username, { domain: host, site_title: ch.name, credentials: { email, login, password } });
 					ctx.secret = { login, password, email, url: `https://${host}/wp-admin` };
 					return { ok: true, detail: 'Hostinger is installing WordPress (a minute or two). The login for the new site is shown once below: copy it. Then press Re-check.' };
