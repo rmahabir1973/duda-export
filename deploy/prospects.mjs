@@ -384,6 +384,7 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 		if (host === tpl || /^build\d*$/.test(ch.slug) || ch.stages?.golive?.done) return { skipped: 'protected' };
 		if (!clients.hostinger.available()) return { skipped: 'Hostinger API key missing' };
 		const w = (await clients.hostinger.websites()).find((x) => x.domain === host);
+		if (w && engine.releaseOxygenLicense) { try { await Promise.race([engine.releaseOxygenLicense(ctxFor(), ch), new Promise((res) => setTimeout(res, 30000).unref?.())]); } catch { /* best effort */ } }
 		if (w) await clients.hostinger.deleteWebsite(host);
 		if (clients.gateway.available()) { try { await clients.gateway.revoke(ch.slug, true); } catch { /* best effort */ } }
 		try { fs.rmSync(dir(ch.id), { recursive: true, force: true }); } catch { /* ignore */ }

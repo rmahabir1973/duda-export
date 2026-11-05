@@ -204,14 +204,18 @@ test('30-day clean-up: warns once at 7 and 2 days, leaves live and kept sites al
 	await h.p.sweep(); assert.deepEqual(h.hostDeleted, [], 'a live site is never deleted'); assert.ok(h.store.get(e.id));
 });
 
-test('applyOxygenLicense writes the key as a constant, never shows it, and says what is missing', async () => {
-	const calls = [];
-	const ssh = { available: () => true, exec: async (cmd) => { calls.push(cmd); if (/test -f .*wp-config\.php/.test(cmd)) return { code: 0, out: 'FOUND', err: '' }; if (/config get OXYGEN_LICENSE_KEY/.test(cmd)) return { code: 1, out: '', err: 'nope' }; if (/config set OXYGEN_LICENSE_KEY/.test(cmd)) return { code: 0, out: 'Success', err: '' }; return { code: 0, out: '', err: '' }; } };
+test('applyOxygenLicense uses Oxygen\'s licence manager, checks it took, never shows the key, and says what is missing', async () => {
+	const calls = []; let stored = false;
+	const ssh = { available: () => true, exec: async (cmd) => { calls.push(cmd); if (/test -f .*wp-config\.php/.test(cmd)) return { code: 0, out: 'FOUND', err: '' }; if (/changeLicenseKey/.test(cmd)) { stored = true; return { code: 0, out: '', err: '' }; } if (/getStoredLicenseKeyValidityInfo/.test(cmd)) return { code: 0, out: stored ? 'HAS:valid' : 'NONE:', err: '' }; return { code: 0, out: '', err: '' }; } };
 	const mk = (key) => ({ c: { cfg: { oxygenLicense: key, previewDomain: 'churchwebglobal.com', siteRoot: '$HOME/domains/{host}/public_html', wpCli: 'wp' }, ssh }, memo: {} });
 	const ch = { slug: 'grace', domain: '' };
 	assert.equal((await applyOxygenLicense(mk(''), ch)).state, 'unknown');
-	const r = await applyOxygenLicense(mk('SECRETKEY123'), ch);
-	assert.equal(r.state, 'ok'); assert.ok(calls.some((c) => /config set OXYGEN_LICENSE_KEY 'SECRETKEY123' --type=constant/.test(c))); assert.doesNotMatch(JSON.stringify(r), /SECRETKEY123/);
+	const r = await applyOxygenLicense(mk("SECRET'KEY123"), ch);
+	assert.equal(r.state, 'ok'); assert.ok(calls.some((c) => /LicenseKeyManager::getInstance\(\)->changeLicenseKey\(/.test(c))); assert.ok(!calls.some((c) => /OXYGEN_LICENSE_KEY/.test(c)), 'no wp-config constant any more'); assert.doesNotMatch(JSON.stringify(r), /SECRET/);
+	const n = calls.length; assert.equal((await applyOxygenLicense(mk('SECRETKEY123'), ch)).state, 'ok'); assert.ok(!calls.slice(n).some((c) => /changeLicenseKey/.test(c)), 'already licensed: not changed again');
+	stored = false; const ssh2 = { ...ssh, exec: async (cmd) => /getStoredLicenseKeyValidityInfo/.test(cmd) ? { code: 0, out: 'HAS:invalid', err: '' } : ssh.exec(cmd) };
+	const bad = await applyOxygenLicense({ c: { cfg: { oxygenLicense: 'K', previewDomain: 'churchwebglobal.com', siteRoot: '$HOME/domains/{host}/public_html', wpCli: 'wp' }, ssh: ssh2 }, memo: {} }, ch);
+	assert.equal(bad.state, 'error'); assert.match(bad.detail, /did not activate it \(it says: invalid\)/);
 });
 
 async function readyRig(o = {}) {
