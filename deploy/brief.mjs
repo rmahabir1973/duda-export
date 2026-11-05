@@ -9,12 +9,18 @@ function docsBlock(docs) {
 	const withText = (docs || []).filter((d) => d.text);
 	const others = (docs || []).filter((d) => !d.text);
 	const out = [];
-	for (const d of withText) out.push(`### ${d.name}\n${String(d.text).slice(0, 6000)}`);
-	if (others.length) out.push('Other attached files (mentioned by name only; use them only if the page text refers to them): ' + others.map((d) => d.name).join(', '));
+	let room = 30000; // total characters of documents in one brief
+	for (const d of withText) {
+		const each = Math.max(1500, Math.min(12000, room));
+		const t = String(d.text).slice(0, each);
+		room -= t.length;
+		out.push(`### ${d.name}\n${t}${String(d.text).length > t.length ? '\n[…shortened]' : ''}`);
+	}
+	if (others.length) out.push('Attached but could not be read (use only if the page text refers to them): ' + others.map((d) => d.name).join(', '));
 	return out.length ? out.join('\n\n') : '';
 }
 
-export function buildBrief({ name, domain, platform, mode, notes, docs }) {
+export function buildBrief({ name, domain, platform, mode, notes, docs, existing }) {
 	const preview = mode !== 'full';
 	const extra = docsBlock(docs);
 	const lines = [
@@ -44,6 +50,7 @@ export function buildBrief({ name, domain, platform, mode, notes, docs }) {
 			'Do not stop to ask about duplicates, extra pages or minor gaps. Pick the best version of anything repeated and move on.',
 		);
 	} else {
+		if (existing) lines.push('A preview of this site already exists on this WordPress site: the key pages are built, the design (template, colours, fonts) is chosen and the header and footer are in place. **Keep that design and those pages exactly as they are, and add the rest of the site in the same style.** Do not rebuild or duplicate the pages that exist (check the existing pages first, then update them only if the package has clearly fuller content).', '');
 		lines.push(
 			'This is the **full site**. Build every page in the package.',
 			'You may ask about things only the church can settle: pages that look like duplicates, pages that look out of date, or content that contradicts itself. Group these into as few questions as you can.',

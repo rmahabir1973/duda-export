@@ -180,3 +180,24 @@ a.btn, button.sm2 { display: inline-block; background: var(--p); color: #fff; bo
 .exp { font-size: 13px; color: var(--muted); align-self: center; } .exp.soon { color: #b32d2e; font-weight: 600; }
 .pr-det { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 8px; } .pr-old a { display: inline-block; margin: 4px 14px 4px 0; }
 @media (max-width: 760px) { ol.stages { grid-template-columns: 1fr 1fr; } .pr-grid { grid-template-columns: 1fr; } }
+
+/* ---- Prospects dashboard (v8.1) */
+.pr-sum{display:flex;flex-wrap:wrap;gap:10px;margin:14px 0}
+.pr-sum .tile{flex:1 1 120px;background:var(--card,#fff);border:1px solid var(--line,#dde3ea);border-radius:10px;padding:10px 14px}
+.pr-sum .tile b{display:block;font-size:1.6rem;line-height:1.1}.pr-sum .tile span{font-size:.82rem;color:#5b6675}
+.pr-sum .tile.hot{border-color:#e0a030;background:#fff8e8}
+.pr-bar{margin:8px 0}.pr-bar input{max-width:360px;width:100%}
+.pr-tablewrap{overflow-x:auto;background:var(--card,#fff);border:1px solid var(--line,#dde3ea);border-radius:10px}
+.pr-table{width:100%;border-collapse:collapse;font-size:.92rem}
+.pr-table th{text-align:left;font-size:.78rem;text-transform:uppercase;letter-spacing:.04em;color:#5b6675;padding:10px 12px;border-bottom:1px solid var(--line,#dde3ea)}
+.pr-table td{padding:10px 12px;vertical-align:top;border-bottom:1px solid #eef1f5}
+.pr-table td small{display:block;color:#6b7686;font-size:.8rem;margin-top:2px}
+.pr-table tr.open>td{background:#f7f9fc}.pr-table tr.drow>td{background:#fbfcfe;padding:14px 18px}
+.pr-table tr.needs_input>td:first-child{box-shadow:inset 3px 0 0 #e0a030}.pr-table tr.failed>td:first-child{box-shadow:inset 3px 0 0 #c0392b}
+.c-act{white-space:normal;min-width:260px}.c-act .sm,.c-act .btn{margin:0 4px 4px 0}
+.chip{display:inline-block;padding:2px 9px;border-radius:99px;font-size:.78rem;font-weight:600;background:#e8edf3;color:#34404f}
+.chip.running{background:#e3f0ff;color:#0b5cad}.chip.done{background:#e1f6e8;color:#12703a}.chip.failed{background:#fde7e4;color:#a02a1c}.chip.needs_input{background:#fff1d6;color:#8a5a00}
+.days b{font-size:1.25rem}.days.ok b{color:#12703a}.days.soon b{color:#b36b00}.days.bad b{color:#c0392b}
+.pr-docs{margin:6px 0;padding-left:18px}.pr-docs li.bad{color:#a02a1c}.pr-docs small{color:#6b7686}
+button[disabled]{opacity:.5;cursor:not-allowed}
+.pr-bar input{padding:8px 11px;border:1px solid #cfd4da;border-radius:7px;font:inherit;background:#fff}

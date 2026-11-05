@@ -1,4 +1,4 @@
-// Prospects: one simple flow per church. Five stages, one status line each, no popups.
+// Prospects: a dashboard of every church, with one simple five-stage flow per church. No popups.
 const $ = (id) => document.getElementById(id), H = { 'Content-Type': 'application/json', 'X-Requested-With': 'duda-export' };
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const api = async (path, opts = {}) => {
@@ -10,44 +10,76 @@ const api = async (path, opts = {}) => {
 };
 const ICON = { done: '✔', working: '●', failed: '!', needs_input: '?', blocked: '⏸', waiting: '○' };
 const WORDS = { done: 'Done', working: 'Working', failed: 'Stopped', needs_input: 'Needs you', blocked: 'Waiting', waiting: '' };
-let rows = [], me = null, openCards = new Set(), confirmDel = null, answers = {}, adminShown = {}, timer = null, typing = false;
+let seen = false, rows = [], me = null, openCards = new Set(), confirmDel = null, confirmFull = null, answers = {}, adminShown = {}, timer = null, typing = false;
 
 const stageHtml = (s) => `<li class="st ${s.state}" title="${esc(s.message || '')}"><span class="ic">${ICON[s.state] || '○'}</span><span class="tt">${esc(s.title)}</span>${WORDS[s.state] ? `<small>${WORDS[s.state]}</small>` : ''}</li>`;
-function card(c) {
-	const cur = c.stages.find((s) => s.key === c.currentStage) || c.stages[0];
-	const open = openCards.has(c.id) || c.runState === 'needs_input' || c.runState === 'failed';
+const fmtDate = (t) => t ? new Date(t).toLocaleDateString('en-CA', { year: 'numeric', month: 'short', day: 'numeric' }) : '';
+const who = (e) => String(e || '').replace(/@.*/, '');
+const curOf = (c) => c.stages.find((s) => s.key === c.currentStage) || c.stages[0];
+const needsYou = (c) => c.runState === 'needs_input';
+const isOpen = () => true; // every church always shows its stages; no Details toggle
+
+function daysCell(c) {
+	if (!c.previewUrl || c.daysLeft == null) return '<span class="hint">—</span>';
+	const n = c.daysLeft, cls = n <= 2 ? 'bad' : n <= 7 ? 'soon' : 'ok';
+	return `<span class="days ${cls}"><b>${n > 0 ? n : 0}</b> day${n === 1 ? '' : 's'}</span><small>${n > 0 ? 'until deleted' : 'past its 30 days'}</small>`;
+}
+function statusCell(c) {
+	const cur = curOf(c), label = c.runState === 'done' ? 'Ready' : needsYou(c) ? 'Needs you' : c.runState === 'failed' ? 'Stopped' : c.runState === 'idle' ? 'Not started' : cur.title;
+	return `<span class="chip ${c.runState}">${esc(label)}</span><small>${esc(c.headline || '')}</small>`;
+}
+function actions(c) {
+	const out = [];
+	if (c.canRetry) out.push(`<button class="primary sm2" data-run="${c.id}">Try again</button>`);
+	if (c.canStart && !c.canRetry && c.runState === 'idle') out.push(`<button class="primary sm2" data-run="${c.id}">Start</button>`);
+	if (c.previewUrl && c.runState === 'done') out.push(`<a class="btn sm" href="${esc(c.previewUrl)}" target="_blank" rel="noopener">Preview</a>`);
+	if (c.canLogin) out.push(`<button class="sm" data-login="${c.id}" title="Sign in to this site's WordPress admin">WP-Admin</button>`);
+	if (c.canFull) out.push(confirmFull === c.id ? `<button class="sm primary" data-full2="${c.id}">Yes, build the full site</button> <button class="sm" data-fullno="1">Cancel</button>` : `<button class="sm" data-full="${c.id}" title="Keep this site and build every page">Build full site</button>`);
+	if (c.previewUrl && c.daysLeft != null) out.push(`<button class="sm" data-ext="${c.id}" ${c.daysLeft >= 30 ? 'disabled title="Already at the 30-day maximum"' : ''}>+7 days</button>`);
+	if (c.canDelete) out.push(confirmDel === c.id ? `<button class="sm danger" data-del2="${c.id}">Yes, delete the site</button> <button class="sm" data-delno="1">Cancel</button>` : `<button class="sm danger" data-del="${c.id}">Delete</button>`);
+	return out.join(' ');
+}
+function detail(c) {
+	const cur = curOf(c);
 	const bar = cur.state === 'working' && cur.pct != null ? `<div class="bar"><i style="width:${cur.pct}%"></i></div>` : cur.state === 'working' ? '<div class="bar ind"><i></i></div>' : '';
 	const q = c.question ? `<div class="qbox"><b>The AI has a question</b><p>${esc(c.question.text)}</p>
 		${(c.question.options || []).map((o) => `<button class="sm" data-ans="${c.id}" data-q="${esc(c.question.id)}" data-v="${esc(o)}">${esc(o)}</button>`).join(' ')}
 		<div class="qrow"><input type="text" data-answer="${c.id}" placeholder="Type your answer" value="${esc(answers[c.id] || '')}"><button class="primary sm2" data-send="${c.id}" data-q="${esc(c.question.id)}">Send</button></div></div>` : '';
 	const blocked = cur.state === 'blocked' ? `<div class="hint">Until then you can do the last step by hand: <a href="/api/prospects/${c.id}/package">download the ZIP</a>, open <a href="${esc(c.previewUrl)}/wp-admin" target="_blank" rel="noopener">the site</a>, then Site Assistant → Import.</div>` : '';
-	const expiry = c.daysLeft != null && c.previewUrl ? `<span class="exp${c.daysLeft <= 7 ? ' soon' : ''}">${c.daysLeft > 0 ? `Deleted in ${c.daysLeft} day${c.daysLeft === 1 ? '' : 's'}` : 'Past its 30 days'}</span> <button class="sm" data-keep="${c.id}">Keep longer</button>` : '';
-	const del = confirmDel === c.id ? `<button class="sm danger" data-del2="${c.id}">Yes, delete the preview site</button> <button class="sm" data-delno="1">Cancel</button>` : (me?.user?.role === 'admin' ? `<button class="sm danger" data-del="${c.id}">Delete</button>` : '');
 	const adm = adminShown[c.id] ? `<div class="hint">Admin login: <code>${esc(adminShown[c.id].login)}</code> / <code>${esc(adminShown[c.id].password)}</code></div>` : '';
-	return `<div class="card pr ${c.runState}" data-id="${c.id}">
-		<div class="pr-top"><div><b class="pr-name">${esc(c.name)}</b> <span class="hint">${esc(c.domain)}${c.platform ? ' · ' + esc(c.platform) : ''}</span> <span class="pill">${c.mode === 'full' ? 'FULL SITE' : 'PREVIEW'}</span></div>
-			<a href="#" data-more="${c.id}" class="hint">${open ? 'Hide details' : 'Show details'}</a></div>
-		<ol class="stages">${c.stages.map(stageHtml).join('')}</ol>
+	const docs = c.docs.length ? `<ul class="pr-docs">${c.docs.map((d) => `<li class="${d.readable ? '' : 'bad'}">${esc(d.name)} <small>${esc(d.note || '')}</small></li>`).join('')}</ul>` : '';
+	return `<ol class="stages">${c.stages.map(stageHtml).join('')}</ol>
 		<div class="status ${cur.state}"><span>${esc(c.headline)}</span></div>${bar}${q}${blocked}
-		<div class="btns">
-			${c.canRetry ? `<button class="primary sm2" data-run="${c.id}">Try again</button>` : ''}
-			${c.canStart && !c.canRetry && c.runState === 'idle' ? `<button class="primary sm2" data-run="${c.id}">Export site</button>` : ''}
-			${c.previewUrl && cur.key === 'ready' ? `<a class="btn" href="${esc(c.previewUrl)}" target="_blank" rel="noopener">Open preview</a>` : ''}
-			${c.zipReady ? `<a class="btn ghost" href="/api/prospects/${c.id}/package">Download ZIP</a>` : ''}
-			${expiry} ${del}
-		</div>
-		${open ? `<div class="pr-det"><div class="hint">Staff login on the preview: <code>churchweb</code> with the standard staff password. ${me?.user?.role === 'admin' && c.previewUrl ? `<a href="#" data-adm="${c.id}">Show admin login</a>` : ''}</div>${adm}
-			${c.docs.length ? `<div class="hint">Extra information: ${c.docs.map((d) => esc(d.name)).join(', ')}</div>` : ''}
-			<div class="hint">${c.exported ? `Export: ${c.exported.pages ?? '?'} pages, ${c.exported.images ?? '?'} images. ` : ''}<a href="/deploy?church=${esc(c.id)}">Open the full checklist</a></div></div>` : ''}
-	</div>`;
+		<div class="pr-det">
+			<div class="hint">Staff login on the preview: <code>churchweb</code> with the standard staff password. ${me?.user?.role === 'admin' && c.previewUrl ? `<a href="#" data-adm="${c.id}">Show admin login</a>` : ''}</div>${adm}
+			${c.notes ? `<div class="hint"><b>Notes:</b> ${esc(c.notes)}</div>` : ''}${docs}
+			<div class="hint">${c.exported ? `Export: ${c.exported.pages ?? '?'} pages, ${c.exported.images ?? '?'} images. ` : ''}${c.zipReady ? `<a href="/api/prospects/${c.id}/package">Download the ZIP</a>` : ''}</div>
+		</div>`;
+}
+function row(c) {
+	const open = isOpen(c);
+	return `<tr class="${c.runState}${open ? ' open' : ''}" data-id="${c.id}">
+		<td class="c-name"><b>${esc(c.name)}</b><small>${esc(c.domain)}${c.platform ? ' · ' + esc(c.platform) : ''}</small>${c.contactEmail ? `<small>${esc(c.contactEmail)}</small>` : ''}</td>
+		<td><span class="pill">${c.mode === 'full' ? 'FULL SITE' : 'PREVIEW'}</span></td>
+		<td class="c-status">${statusCell(c)}</td>
+		<td class="c-days">${daysCell(c)}</td>
+		<td class="c-added">${fmtDate(c.createdAt)}<small>${esc(who(c.createdBy))}</small>${c.exported ? `<small>${c.exported.pages ?? '?'} pages</small>` : ''}</td>
+		<td class="c-act">${actions(c)}</td>
+	</tr>${open ? `<tr class="drow"><td colspan="6">${detail(c)}</td></tr>` : ''}`;
+}
+function summary(list) {
+	const n = (f) => list.filter(f).length;
+	const cells = [['Prospects', list.length], ['Building', n((c) => c.runState === 'running')], ['Need you', n(needsYou)], ['Stopped', n((c) => c.runState === 'failed')], ['Ready', n((c) => c.runState === 'done')], ['Deleted within 7 days', n((c) => c.previewUrl && c.daysLeft != null && c.daysLeft <= 7)]];
+	return cells.map(([k, v]) => `<div class="tile${v && (k === 'Need you' || k === 'Stopped' || k.startsWith('Deleted')) ? ' hot' : ''}"><b>${v}</b><span>${k}</span></div>`).join('');
 }
 function render() {
 	if (typing) return;
-	const mine = rows.filter((r) => !r.legacy), old = rows.filter((r) => r.legacy);
-	$('list').innerHTML = mine.map(card).join('');
-	$('empty').hidden = mine.length > 0; if (!mine.length) $('newBox').open = true;
-	$('oldBox').hidden = !old.length; $('oldN').textContent = old.length ? `(${old.length})` : '';
-	$('old').innerHTML = old.map((o) => `<a href="/deploy?church=${esc(o.id)}">${esc(o.name)}</a>`).join('');
+	const mine = rows.filter((r) => !r.legacy);
+	const f = $('fFind')?.value.trim().toLowerCase() || '', shown = f ? mine.filter((c) => `${c.name} ${c.domain} ${c.contactEmail}`.toLowerCase().includes(f)) : mine;
+	$('sum').innerHTML = mine.length ? summary(mine) : '';
+	$('dash').hidden = !mine.length;
+	$('rows').innerHTML = shown.map(row).join('') || `<tr><td colspan="6" class="hint">Nothing matches.</td></tr>`;
+	$('empty').hidden = mine.length > 0; if (!mine.length) $('newBox').open = true; else if (!seen) { $('newBox').open = !!new URLSearchParams(location.search).get('url'); } seen = true;
 }
 async function load() {
 	try { rows = await api('/api/prospects'); render(); } catch (e) { $('nErr').textContent = e.message; }
@@ -60,15 +92,24 @@ document.addEventListener('focusin', (e) => { if (e.target.matches('[data-answer
 document.addEventListener('focusout', (e) => { if (e.target.matches('[data-answer]')) { typing = false; } });
 document.addEventListener('input', (e) => { if (e.target.matches('[data-answer]')) answers[e.target.dataset.answer] = e.target.value; });
 document.addEventListener('click', async (e) => {
-	const t = e.target.closest('[data-more],[data-run],[data-keep],[data-del],[data-del2],[data-delno],[data-adm],[data-ans],[data-send]'); if (!t) return;
+	const t = e.target.closest('[data-more],[data-run],[data-ext],[data-login],[data-full],[data-full2],[data-fullno],[data-del],[data-del2],[data-delno],[data-adm],[data-ans],[data-send]'); if (!t) return;
 	e.preventDefault();
 	const d = t.dataset;
 	if (d.more) { openCards.has(d.more) ? openCards.delete(d.more) : openCards.add(d.more); return render(); }
 	if (d.run) return act(() => api(`/api/prospects/${d.run}/run`, { method: 'POST', body: '{}' }));
-	if (d.keep) return act(() => api(`/api/prospects/${d.keep}/keep`, { method: 'POST', body: '{}' }));
+	if (d.ext) return act(() => api(`/api/prospects/${d.ext}/extend`, { method: 'POST', body: JSON.stringify({ days: 7 }) }));
+	if (d.login) {
+		const w = window.open('about:blank', '_blank'); // opened first so the browser doesn't block it
+		try { const r = await api(`/api/prospects/${d.login}/login`, { method: 'POST', body: '{}' }); if (w) w.location.href = r.url; else location.href = r.url; }
+		catch (x) { if (w) w.close(); alert(x.message); }
+		return;
+	}
+	if (d.full) { confirmFull = d.full; return render(); }
+	if (d.fullno) { confirmFull = null; return render(); }
+	if (d.full2) { confirmFull = null; openCards.add(d.full2); return act(() => api(`/api/prospects/${d.full2}/full`, { method: 'POST', body: '{}' })); }
 	if (d.del) { confirmDel = d.del; return render(); }
 	if (d.delno) { confirmDel = null; return render(); }
-	if (d.del2) { confirmDel = null; return act(() => api(`/api/deploy/churches/${d.del2}`, { method: 'DELETE', body: JSON.stringify({ confirm: d.del2, deleteSite: true }) })); }
+	if (d.del2) { confirmDel = null; return act(() => api(`/api/prospects/${d.del2}`, { method: 'DELETE' })); }
 	if (d.adm) { adminShown[d.adm] = await api(`/api/prospects/${d.adm}/admin-login`).catch((x) => ({ login: 'error', password: x.message })); return render(); }
 	if (d.ans) { typing = false; return act(() => api(`/api/prospects/${d.ans}/answer`, { method: 'POST', body: JSON.stringify({ questionId: d.q, answer: d.v }) })); }
 	if (d.send) { const v = (answers[d.send] || '').trim(); if (!v) return; typing = false; answers[d.send] = ''; return act(() => api(`/api/prospects/${d.send}/answer`, { method: 'POST', body: JSON.stringify({ questionId: d.q, answer: v }) })); }
@@ -101,6 +142,8 @@ $('newForm').addEventListener('submit', async (e) => {
 	} catch (x) { $('nErr').textContent = x.message; }
 	$('nGo').disabled = false; await load();
 });
+
+$('fFind').addEventListener('input', () => render());
 
 /* ---- start */
 (async () => {

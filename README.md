@@ -239,13 +239,13 @@ Support follow-up (v7.9): routine registrar messages (autorenew order pending, r
 
 ## Prospects (v8.0)
 
-One screen replaces the Exporter and the Customers checklist for new churches. Menu: **Prospects**.
+One screen replaces the Exporter and the Customers checklist for new churches (the old checklist page now redirects here). Menu: **Prospects**.
 
 1. **Add church**: website address (name and platform are found automatically), contact email, Preview (home + 5 key pages) or Full site, optional notes and documents. The "＋ Prospect" button in the Directory pre-fills this.
 2. **Export**: runs the exporter (preview mode for a Preview).
 3. **Create site**: `slug.churchwebglobal.com` on Hostinger, WordPress, our plugins, the AI Assistant key from the gateway, Preview Mode, staff view, team login, and the Oxygen licence. The runner reuses the existing checks and fixes (Details → "Open the full checklist" still shows them) and does them one after another with no Re-check presses.
 4. **Build site**: the portal gives the site signed links to the ZIP and the design brief; the plugin (v1.11.0+) imports the content and images and runs the assistant on its own. If the assistant needs a person it asks inside the portal ("Needs you"); the build resumes when you answer.
-5. **Ready**: preview link. Unconverted previews are deleted 30 days after the site is created (warnings at 7 and 2 days, "Keep longer" adds 30 days).
+5. **Ready**: preview link. Unconverted previews are deleted 30 days after the site is created (warnings at 7 and 2 days, +7 days extends it).
 
 Settings (Railway):
 - `OXYGEN_LICENSE_KEY` (or `oxygen_license_key`): written into each new site's wp-config.php as `OXYGEN_LICENSE_KEY`. The key is never shown.
@@ -261,3 +261,14 @@ Plugin bridge (plugin v1.11.0, `includes/class-cwai-portal.php`):
 - Until the plugin is updated on the template site (build2), the Build stage shows "waiting for the plugin update" with the manual import as a fallback.
 
 Portal callback endpoints (no sign-in, signed token per church): `/api/build/:id/package.zip`, `brief.md`, `docs/:n`, `state`, and `POST status`.
+
+## Prospects dashboard, full site, one-click login, documents (v8.1)
+
+- **Dashboard.** Prospects is now a table of every church: type, status, time left until the preview is deleted, who added it and when, pages exported. Click Details for the five stages, the AI's question box, notes and documents. Search by name, website or email.
+- **Delete.** Removes the Hostinger site, the AI key and the record (two clicks). Live (go-live) sites and the template can't be deleted here.
+- **+7 days.** Adds 7 days to the preview's end date each press, never past 30 days from today (an overdue preview restarts from today). The 7- and 2-day warnings reset.
+- **Build full site.** On a finished preview. Keeps the same WordPress site and design, runs a fresh full export, and the AI adds the remaining pages in the same style (it is told not to rebuild or duplicate the existing pages). It may ask about duplicates in this mode.
+- **WP-Admin (one click).** Needs plugin v1.12.0 on the template site. The portal runs `wp cwai portal-login` over SSH, which returns a single-use link valid for two minutes (only a hash of the token is stored). The portal only opens it if the link is for that church's own address. For older sites, Details still has the admin password (admins only).
+- **Reading documents.** Word (.docx), Excel (.xlsx), OpenDocument (.odt/.ods), PDF, RTF, text, CSV and HTML are read into the AI's brief (up to 30,000 characters in total, 12,000 per file). Old .doc/.xls files and scanned (picture-only) PDFs can't be read; the file list says so, and the AI is only told the file name. Pure JavaScript (fflate, unpdf), nothing extra to install on Railway.
+- The old checklist screen (/deploy) is retired: it redirects to Prospects, and the Details toggle is gone; every church always shows its stages.
+- Preview sites never touch DNS: *.churchwebglobal.com resolves through the wildcard, so the Create site step skips the DNS check and Cloudflare is not called. DNS is for go-live only.

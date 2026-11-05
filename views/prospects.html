@@ -26,9 +26,15 @@
       <p class="err" id="nErr"></p>
     </form>
   </details>
-  <div id="list"></div>
+  <section id="dash" hidden>
+    <div class="pr-sum" id="sum"></div>
+    <div class="pr-bar"><input id="fFind" type="search" placeholder="Search by name, website or email" aria-label="Search prospects"></div>
+    <div class="pr-tablewrap"><table class="pr-table">
+      <thead><tr><th>Church</th><th>Type</th><th>Status</th><th>Time left</th><th>Added</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table></div>
+  </section>
   <p class="hint" id="empty" hidden>No prospects yet. Add the first one above, or press "Prospect" on a church in the Directory.</p>
-  <details class="sect" id="oldBox" hidden><summary>Earlier customers <span class="hint" id="oldN"></span></summary><div id="old" class="pr-old"></div></details>
 </main>
 <script src="/assets/prospects.js"></script>
 </body></html>
