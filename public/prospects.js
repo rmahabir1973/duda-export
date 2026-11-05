@@ -53,6 +53,7 @@ function actions(c) {
 	if (c.canLogin) out.push(`<button class="sm" data-login="${c.id}" title="Sign in to this site's WordPress admin">WP-Admin</button>`);
 	if (c.canFull) out.push(confirmFull === c.id ? `<button class="sm primary" data-full2="${c.id}">Yes, build the full site</button> <button class="sm" data-fullno="1">Cancel</button>` : `<button class="sm" data-full="${c.id}" title="Keep this site and build every page">Build full site</button>`);
 	if (c.previewUrl && c.daysLeft != null) out.push(`<button class="sm" data-ext="${c.id}" ${c.daysLeft >= 30 ? 'disabled title="Already at the 30-day maximum"' : ''}>+7 days</button>`);
+	if (c.previewUrl && c.runState === 'done') out.push(`<button class="sm" data-lic="${c.id}" title="Apply the Oxygen licence to this site">Oxygen licence</button>`);
 	if (c.canDelete) out.push(confirmDel === c.id ? `<button class="sm danger" data-del2="${c.id}">Yes, delete the site</button> <button class="sm" data-delno="1">Cancel</button>` : `<button class="sm danger" data-del="${c.id}">Delete</button>`);
 	return out.join(' ');
 }
@@ -112,11 +113,12 @@ document.addEventListener('focusin', (e) => { if (e.target.matches('[data-answer
 document.addEventListener('focusout', (e) => { if (e.target.matches('[data-answer]')) { typing = false; } });
 document.addEventListener('input', (e) => { if (e.target.matches('[data-answer]')) answers[e.target.dataset.answer] = e.target.value; });
 document.addEventListener('click', async (e) => {
-	const t = e.target.closest('[data-more],[data-run],[data-restart],[data-restart2],[data-restartno],[data-ext],[data-login],[data-full],[data-full2],[data-fullno],[data-del],[data-del2],[data-delno],[data-adm],[data-ans],[data-send]'); if (!t) return;
+	const t = e.target.closest('[data-more],[data-run],[data-restart],[data-restart2],[data-restartno],[data-ext],[data-lic],[data-login],[data-full],[data-full2],[data-fullno],[data-del],[data-del2],[data-delno],[data-adm],[data-ans],[data-send]'); if (!t) return;
 	e.preventDefault();
 	const d = t.dataset;
 	if (d.more) { openCards.has(d.more) ? openCards.delete(d.more) : openCards.add(d.more); return render(); }
 	if (d.run) return act(() => api(`/api/prospects/${d.run}/run`, { method: 'POST', body: '{}' }));
+	if (d.lic) return act(async () => { t.disabled = true; const r = await api(`/api/prospects/${d.lic}/license`, { method: 'POST', body: '{}' }); alert(r.state === 'ok' ? 'Oxygen is licensed on this site.' : (r.detail || 'The licence could not be applied.')); });
 	if (d.ext) return act(() => api(`/api/prospects/${d.ext}/extend`, { method: 'POST', body: JSON.stringify({ days: 7 }) }));
 	if (d.login) {
 		const w = window.open('about:blank', '_blank'); // opened first so the browser doesn't block it

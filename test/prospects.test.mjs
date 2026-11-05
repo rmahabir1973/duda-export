@@ -43,7 +43,7 @@ function rig({ ssh = null, cwai = false, hostFails = false, autoDelete = false, 
 	};
 	const exporter = { enqueue: async (b) => { calls.enqueue.push(b); return { id: 'job1' }; }, get: () => job };
 	const p = createProspects({ store, clients, exporter, dataDir: dir, notify: async (m) => { mail.push(m); }, secret: 'k', now: () => clock.t, autoDelete, alertTo: ['boss@x.ca'], baseUrl: 'https://portal.test', engine, log: () => {} });
-	return { p, store, clock, mail, hostDeleted, bg, wp, st, job, calls, dir, golive, loginResult, optionResult };
+	return { p, engine, store, clock, mail, hostDeleted, bg, wp, st, job, calls, dir, golive, loginResult, optionResult };
 }
 const make = async (r, o = {}) => { const c = await r.p.create({ url: 'https://www.graceunited.ca/', contactEmail: 'office@grace.ca', mode: 'preview', ...o }, 'staff@x.ca'); return c; };
 
@@ -372,4 +372,12 @@ test('AI cost: if the gateway cannot give a reading the build still runs and the
 	assert.ok(r.store.get(c.id).run.buildStartedAt, 'the build started anyway');
 	const v = r.p.view(r.store.get(c.id)).cost; assert.equal(v.preview.state, 'unavailable'); assert.match(v.preview.note, /deploy the new cwai-gateway\.zip/);
 	const q = rig(); const cc = await make(q); assert.equal(q.p.view(q.store.get(cc.id)).cost.tracked, false, 'without a gateway key nothing is tracked');
+});
+
+test('licence: the dashboard can apply the Oxygen licence to an existing site, and says what went wrong', async () => {
+	const { r, c } = await readyRig();
+	assert.deepEqual(await r.p.licence(c.id), { state: 'ok', detail: 'Added the Oxygen licence key to the site.' });
+	r.engine.applyOxygenLicense = async () => ({ state: 'error', detail: 'The key was saved but Oxygen did not activate it (it says: invalid).' });
+	const bad = await r.p.licence(c.id); assert.equal(bad.state, 'error'); assert.match(bad.detail, /invalid/);
+	await assert.rejects(() => r.p.licence('nope'), /Not a prospect/);
 });
