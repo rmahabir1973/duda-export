@@ -123,7 +123,8 @@ export async function createPortal({ db, sessionHours = 12, apiToken = '', boots
 		});
 
 		// ---- everything below needs a signed-in person
-		r.use('/api', need);
+		// The plugin on each church's site calls /api/build/* with its own signed, single-church token (checked by that router), so it is the one thing that doesn't need a person signed in.
+		r.use('/api', (req, res, next) => (req.path.startsWith('/build/') ? next() : need(req, res, next)));
 		r.get('/api/me', (req, res) => res.json({ user: req.user && { email: req.user.email, name: req.user.name, role: req.user.role, mustChange: !!req.user.mustChange, twoFactor: !!req.user.twoFactor }, mode: 'accounts' }));
 		r.post('/api/account/password', async (req, res) => {
 			if (req.viaToken) return res.status(400).json({ error: 'The API token has no password.' });
