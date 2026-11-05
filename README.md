@@ -302,3 +302,9 @@ Portal callback endpoints (no sign-in, signed token per church): `/api/build/:id
 - DNS plan lists every other record already in the zone (old Namecheap forwarding MX, stray records) with a **Remove** button (confirmed). The website and standard mail records can't be removed from here.
 - Email setup has a customer picker, fills the domain and mailbox names, and shows what has been done.
 - A web address pasted as the church name is replaced by the name found on the site (cleaner Hostinger site names).
+
+## v10.5 — safeguards for sites that already exist
+- A new prospect never reuses a short name that already exists as a Hostinger site.
+- The build stops before changing anything if a site already sits at the preview address and this prospect did not create it (this is what overwrote a live WordPress site).
+- Go-live refuses to attach a domain that is already its own site on Hostinger.
+- The Prospects row warns when the church is already WordPress or already on our hosting.

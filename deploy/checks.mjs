@@ -559,6 +559,9 @@ export const STAGES = [
 				async fix(ctx, ch) {
 					const host = tempHost(ch, ctx.c.cfg), w = await siteRecord(ctx, host);
 					if (!w) return { ok: false, detail: 'The preview site doesn\'t exist on Hostinger.' };
+					// the real domain must not already be its own site on Hostinger: attaching it here would clash with (or replace) that site
+					const other = (await ctx.c.hostinger.websites()).find((x) => String(x.domain || '').toLowerCase() === ch.domain && x.domain !== host);
+					if (other) return { ok: false, detail: `${ch.domain} is already a separate website on Hostinger. Swap them by hand (remove it there first), then press this again, so the old site isn't overwritten.` };
 					await ctx.c.hostinger.addParkedDomain(w.username, host, ch.domain);
 					return { ok: true, detail: `Added ${ch.domain} to the site. The domain must already point at Hostinger (Domain setup). Hostinger needs a few minutes: press Re-check.` };
 				},

@@ -124,6 +124,11 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 		for (let guard = 0; guard < 24; guard++) {
 			const cur = store.get(ch.id), ctx = ctxFor();
 			const results = await engine.testStage(ctx, cur, stage);
+			// First pass only: if a site already sits at our preview address and this prospect never made it, stop. Installing plugins and Oxygen would overwrite someone's live site.
+			if (!cur.stages?.preview?.at && !cur.prospect.ownsSite && results.site?.state === 'ok') {
+				const m = `A website already exists at ${previewHost(cur)} and this prospect didn't create it, so nothing was changed. Choose a different short name for this church (Delete this prospect and add it again), or ask a person to check the site on Hostinger.`;
+				setStep(ch.id, 'site', { state: 'failed', message: m, pct: 0 }, { state: 'failed' }); await tell(cur, `Site setup stopped: ${cur.name}`, m, true); return true;
+			}
 			const reqs = needed(engine, stage, cur).filter((q) => !q.manual);
 			const total = reqs.length + 1, done = reqs.filter((q) => engine.isSatisfied(results[q.id]?.state)).length;
 			const saveResults = (extra = {}) => store.update(ch.id, (c) => { const st = (c.stages.preview ||= {}); st.results = { ...results, ...extra }; st.at = now(); st.done = needed(engine, stage, c).every((q) => engine.isSatisfied(st.results[q.id]?.state)); });
@@ -151,6 +156,7 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 			try { out = await engine.fixReq(ctx, cur, stage, next, r); } catch (e) { out = { ok: false, detail: e.message }; }
 			patch(ch.id, (rr) => { rr.attempts[next.id] = (rr.attempts[next.id] || 0) + 1; rr.lastFix[next.id] = { at: now(), ok: !!out.ok, detail: clip(out.detail, 200) }; });
 			note(ch.id, `${doing(next)}: ${out.ok ? 'done' : 'could not do it'}${out.detail && !out.ok ? ' (' + clip(out.detail, 120) + ')' : ''}`, out.ok ? 'info' : 'warn');
+			if (out.ok && next.id === 'site') store.update(ch.id, (c) => { c.prospect.ownsSite = true; });
 			if (out.ok && !['site', 'folder', 'dns'].includes(next.id)) continue; // quick steps: carry straight on
 			return true;
 		}
@@ -374,7 +380,8 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 		if (!DOMAIN_RE.test(domain)) throw new Error('That does not look like a website address (for example britanniaunited.ca).');
 		let html = '';
 		try { const r = await clients.http.get(`https://${domain}/`); if (r && r.status < 400) html = r.text || ''; } catch { /* name from the address instead */ }
-		return { domain, name: nameFromTitle(titleOf(html), domain), platform: platformFromHtml(html) };
+		let ours = false; try { const ip = clients.cfg?.hostingerIp; ours = !!ip && (await clients.dns.a(domain)).includes(ip); } catch { /* unknown: no warning */ }
+		return { domain, name: nameFromTitle(titleOf(html), domain), platform: platformFromHtml(html), ours };
 	}
 	async function create({ url, name, contactEmail, mode, notes }, by = '') {
 		const d = await detect(url);
@@ -382,10 +389,14 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 		let slug = slugify(nm).slice(0, 30).replace(/-+$/g, ''), n = 1;
 		const base = slug;
 		while (!SLUG_RE.test(slug) || store.get(slug)) { n++; slug = (base.slice(0, 27) + '-' + n).replace(/-+/g, '-'); if (n > 50) throw new Error('Could not make a short name for this church.'); }
+		// a name already used by a site on Hostinger (made outside the portal, or by a record that was deleted) must never be picked up as "our" preview
+		if (clients.hostinger?.available?.()) {
+			try { const taken = new Set((await clients.hostinger.websites()).map((w) => String(w.domain || '').toLowerCase())); while (taken.has(`${slug}.${clients.cfg.previewDomain}`.toLowerCase())) { n++; slug = (base.slice(0, 27) + '-' + n).replace(/-+/g, '-'); if (n > 50) throw new Error('Could not make a short name for this church.'); } } catch (e) { if (/short name/.test(e.message)) throw e; /* can't check: the build step checks again before it touches anything */ }
+		}
 		const email = String(contactEmail || '').trim();
 		if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error('That email address does not look right.');
 		const c = store.create({ name: nm, slug, domain: d.domain, plan: 'website', kind: 'new', contactEmail: email, notes: '' }, by);
-		store.update(c.id, (x) => { x.prospect = { url: String(url).trim(), domain: d.domain, mode: mode === 'full' ? 'full' : 'preview', platform: d.platform, notes: String(notes || '').slice(0, 2000), docs: [], createdAt: now() }; x.run = blankRun(); });
+		store.update(c.id, (x) => { x.prospect = { url: String(url).trim(), domain: d.domain, mode: mode === 'full' ? 'full' : 'preview', platform: d.platform, existingOurs: !!d.ours, notes: String(notes || '').slice(0, 2000), docs: [], createdAt: now() }; x.run = blankRun(); });
 		return store.get(c.id);
 	}
 	async function addDoc(id, filename, buf) {
@@ -431,6 +442,7 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 			notes: p.notes || '', url: p.url || '', siteReadyAt: p.siteReadyAt || null, switchedAt: p.switchedAt || null, slug: ch.slug,
 			canFull: p.mode !== 'full' && s.build.state === 'done' && run.state === 'done',
 			canLogin: s.site.state === 'done',
+			warning: p.existingOurs ? 'This domain already points at our hosting, so it may be a live site. The preview is built separately and never touches it. Going live is blocked until you swap it by hand.' : p.platform === 'WordPress' ? 'This is a WordPress site. The preview is built separately and never touches it.' : '',
 			canDelete: !ch.stages?.golive?.done, customer: !!ch.customer,
 			canRestart: s.site.state === 'done' && ['working', 'needs_input', 'blocked'].includes(s.build.state),
 			tidy: run.cleanup ? { state: run.cleanup.state, message: run.cleanup.message } : null,
