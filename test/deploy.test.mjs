@@ -26,8 +26,8 @@ function fakes(over = {}) {
 		const ok = (out = '') => ({ code: 0, out, err: '' }), bad = (err = 'error') => ({ code: 1, out: '', err });
 		let x;
 		if (/^plugin list --fields=name,title,status/.test(a)) return ok(JSON.stringify(wpState.plugins || []));
-		if ((x = /^plugin deactivate '([^']+)'/.exec(a))) { const p = (wpState.plugins || []).find((q) => q.name === x[1]); if (p) p.status = 'inactive'; return ok(); }
-		if ((x = /^plugin delete '([^']+)'/.exec(a))) { if (over.deleteFails) return bad('Error: could not delete'); wpState.plugins = (wpState.plugins || []).filter((q) => q.name !== x[1]); return ok(); }
+		if ((x = /^plugin deactivate ((?:'[^']+' ?)+)/.exec(a))) { for (const n of x[1].match(/'([^']+)'/g).map((v) => v.slice(1, -1))) { const p = (wpState.plugins || []).find((q) => q.name === n); if (p) p.status = 'inactive'; } return ok(); }
+		if ((x = /^plugin delete ((?:'[^']+' ?)+)/.exec(a))) { if (over.deleteFails) return bad('Error: could not delete'); const gone = x[1].match(/'([^']+)'/g).map((v) => v.slice(1, -1)); wpState.plugins = (wpState.plugins || []).filter((q) => !gone.includes(q.name)); return ok(); }
 		if ((x = /^user get '([^']+)' --field=(roles|ID)/.exec(a))) { const u = (wpState.wpUsers ||= {})[x[1]]; return u ? ok(x[2] === 'roles' ? u.role : '9') : bad('Error: Invalid user'); }
 		if ((x = /^user update '([^']+)' --role=(\w+) --user_pass='([^']*)'/.exec(a))) { (wpState.wpUsers ||= {})[x[1]] = { role: x[2], pass: x[3] }; return ok(); }
 		if (/^plugin list --status=active --field=name/.test(a)) return ok((/build2/.test(cmd) ? TPL : wpState.activePlugins.map((n) => n.replace('copied:', ''))).join('\n'));
@@ -500,7 +500,7 @@ test('Hostinger plugins: found by name or title, deactivated then deleted, and n
 	const ch = createStore(tmp()).create({ name: 'Grace Church' }), stage = stageByKey('preview'), req = stage.reqs.find((q) => q.id === 'hostingerPlugins');
 	const t = await testStage(ctxOf(f), ch, stage); assert.equal(t.hostingerPlugins.state, 'no'); assert.match(t.hostingerPlugins.detail, /Hostinger AI.*Hostinger Hub.*Hostinger Preview Domain/);
 	const out = await fixReq(ctxOf(f), ch, stage, req, t.hostingerPlugins); assert.equal(out.ok, true); assert.match(out.detail, /Removed 3/);
-	assert.ok(f.calls.ssh.some((c) => /plugin deactivate 'hostinger-easy-onboarding'/.test(c)), 'an active one is deactivated first');
+	assert.ok(f.calls.ssh.some((c) => /plugin deactivate .*'hostinger-easy-onboarding'.*--skip-plugins/.test(c)), 'an active one is deactivated first, without loading the plugins');
 	assert.ok(!f.calls.ssh.some((c) => /plugin (deactivate|delete) '(oxygen|churchweb-ai-assistant)'/.test(c)), 'our plugins are never touched');
 	assert.equal((await testStage(ctxOf(f), ch, stage)).hostingerPlugins.state, 'ok');
 	const bad = fakes({ wp: { plugins: HOST_PLUGINS() }, deleteFails: true }); const r2 = await fixReq(ctxOf(bad), ch, stage, req, { state: 'no' });

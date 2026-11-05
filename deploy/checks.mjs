@@ -42,7 +42,7 @@ const siteOf = (ctx, ch) => memo(ctx, 'site', async () => {
 const wpRun = (ctx, host, args) => ctx.c.ssh.exec(`cd ${sitePath(ctx.c.cfg, host)} && ${ctx.c.cfg.wpCli} ${args}`);
 const wpGet = async (ctx, host, args) => { const r = await wpRun(ctx, host, args); return r.code === 0 ? r.out.trim() : null; };
 /** Plugins made by Hostinger (matched on slug or title), or null if the list can't be read. */
-const hostingerPlugins = async (ctx, h) => { const t = await wpGet(ctx, h, 'plugin list --fields=name,title,status --format=json'); if (t === null) return null; try { return JSON.parse(t).filter((p) => /hostinger/i.test(p.name) || /hostinger/i.test(p.title || '')); } catch { return null; } };
+const hostingerPlugins = async (ctx, h) => { const t = await wpGet(ctx, h, 'plugin list --fields=name,title,status --format=json --skip-plugins --skip-themes'); if (t === null) return null; try { return JSON.parse(t).filter((p) => /hostinger/i.test(p.name) || /hostinger/i.test(p.title || '')); } catch { return null; } };
 const handCmd = (ctx, ch, args) => `cd ${sitePath(ctx.c.cfg, tempHost(ch, ctx.c.cfg))} && ${ctx.c.cfg.wpCli} ${args}`;
 
 
@@ -235,10 +235,12 @@ export const STAGES = [
 				test: (ctx, ch) => onSite(ctx, ch, async (h) => { const l = await hostingerPlugins(ctx, h); return l === null ? unk('Couldn\'t read the plugin list.') : l.length ? no(`Still installed: ${l.map((p) => p.title || p.name).join(', ')}`) : ok('No Hostinger plugins.'); }),
 				fix: (ctx, ch) => fixOnSite(ctx, ch, [handCmd(ctx, ch, 'plugin deactivate <each Hostinger plugin>'), handCmd(ctx, ch, 'plugin delete <each Hostinger plugin>')], async (h) => {
 					const l = await hostingerPlugins(ctx, h); if (l === null) return { ok: false, detail: 'Couldn\'t read the plugin list.' };
-					const failed = [];
-					for (const p of l) {
-						if (p.status === 'active' || p.status === 'active-network') await wpRun(ctx, h, `plugin deactivate ${shq(p.name)}`);
-						const r = await wpRun(ctx, h, `plugin delete ${shq(p.name)}`); if (r.code) failed.push(p.name);
+					// One command for all of them, and without loading the plugins being removed (the Hostinger ones call out to the internet and can hang WP-CLI).
+					const failed = [], names = l.map((p) => shq(p.name)).join(' '), fast = '--skip-plugins --skip-themes';
+					if (l.length) {
+						await wpRun(ctx, h, `plugin deactivate ${names} ${fast}`);
+						const r = await wpRun(ctx, h, `plugin delete ${names} ${fast}`);
+						if (r.code) { const left = (await hostingerPlugins(ctx, h)) || l; for (const p of left) failed.push(p.name); }
 					}
 					return { ok: !failed.length, detail: `Removed ${l.length - failed.length} Hostinger plugin(s).${failed.length ? ' Couldn\'t delete: ' + failed.join(', ') : ''}` };
 				}),
