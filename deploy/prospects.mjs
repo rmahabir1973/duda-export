@@ -19,6 +19,7 @@ const BUILD_SILENCE_MS = 25 * 60000; // the build stopped reporting
 const DOC_EXT = /\.(txt|md|csv|html?|rtf|pdf|docx?|odt|xlsx?)$/i;
 const MAX_DOC = 10 * 1048576;
 const EXTEND_DAYS = 7;
+const POLL_AFTER_MS = 60000, POLL_EVERY_MS = 45000;
 // A preview lives on *.churchwebglobal.com, which already resolves through the wildcard record, so the portal never touches DNS for it. DNS comes back at go-live.
 // The Hostinger plugins are removed last, after the build, because removing them first stalled on some sites.
 const SKIP_REQS = new Set(['dns', 'hostingerPlugins']);
@@ -170,6 +171,18 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 		const run = ch.run, b = run.steps.build;
 		if (b.state === 'done' || b.state === 'needs_input') return false;
 		if (b.state === 'working' && run.buildStartedAt) {
+			// If the site has gone quiet, ask it directly (the progress messages can be blocked on the way here): its own saved state says what happened.
+			if (now() - (run.buildHeardAt || run.buildStartedAt) > POLL_AFTER_MS && now() - (run.polledAt || 0) > POLL_EVERY_MS) {
+				patch(ch.id, (r) => { r.polledAt = now(); });
+				try {
+					const o = await engine.runWp(ctxFor(), ch, 'option get cwai_portal_build --format=json');
+					const st = o.code === 0 ? JSON.parse(String(o.out || '').trim().split('\n').pop() || '{}') : null;
+					if (st && Number(st.updated) * 1000 >= run.buildStartedAt - 5000 && ['failed', 'done', 'working'].includes(st.state) && (st.message || st.state !== 'working')) {
+						reportBuild(ch.id, { state: st.state, message: st.state === 'failed' ? `${st.message || 'The build failed.'}` : st.message, pct: st.pct });
+						return true;
+					}
+				} catch { /* the normal timeout below still applies */ }
+			}
 			if (now() - (run.buildHeardAt || run.buildStartedAt) > BUILD_SILENCE_MS) { setStep(ch.id, 'build', { state: 'failed', message: 'The build stopped reporting back. Press Try again.' }, { state: 'failed' }); await tell(ch, `Build stalled: ${ch.name}`, 'The build stopped reporting back.', true); }
 			return false; // progress arrives from the plugin
 		}

@@ -22,6 +22,7 @@ function rig({ cwai = false, hostFails = false, autoDelete = false, golive = fal
 	const job = { status: 'queued', summary: { pages: 6, images: 14, zipMB: 3.2 }, lastLog: 'reading page 2', zipPath: path.join(dir, 'e.zip'), platform: 'DUDA' };
 	fs.writeFileSync(job.zipPath, 'zip');
 	const calls = { fix: [], enqueue: [] };
+	const optionResult = { code: 1, out: '', err: '' };
 	const loginResult = { code: 0, out: 'Success: hi\nhttps://grace-united-church.churchwebglobal.com/?cwai_login=' + 'a'.repeat(64) + '\n', err: '' };
 	const engine = {
 		STAGES: [{ key: 'preview', reqs: [{ id: 'dns', label: 'dns', fix: true }, { id: 'hostingerPlugins', label: 'hp', fix: true }, { id: 'a', label: 'a', fix: true }, { id: 'b', label: 'b', fix: true }, { id: 'c', label: 'c', fix: true }, { id: 'oxygen', label: 'Oxygen', manual: true }] }],
@@ -29,7 +30,7 @@ function rig({ cwai = false, hostFails = false, autoDelete = false, golive = fal
 		testStage: async (ctx, ch) => ({ dns: { state: 'no' }, hostingerPlugins: { state: 'no' }, a: { state: st.a }, b: { state: st.b }, c: { state: st.c }, oxygen: { state: ch.stages?.preview?.manual?.oxygen ? 'ok' : 'no' } }),
 		fixReq: async (ctx, ch, stage, q) => { if (q.id === 'dns') throw new Error('Cloudflare must not be called'); if (q.id === 'hostingerPlugins') { calls.cleanup = (calls.cleanup || 0) + 1; return { ok: true, detail: 'Removed 3 Hostinger plugin(s).' }; } calls.fix.push(q.id); if (hostFails) return { ok: false, detail: 'Hostinger said no' }; st[q.id] = 'ok'; return { ok: true, detail: 'done' }; },
 		applyOxygenLicense: async () => ({ state: 'ok', detail: 'Added the Oxygen licence key to the site.' }),
-		runWp: async (ctx, ch, args) => { wp.push(args); if (/portal-login/.test(args)) return loginResult; return /^help cwai portal-build/.test(args) ? { code: cwai ? 0 : 1, out: '', err: '' } : { code: 0, out: '', err: '' }; },
+		runWp: async (ctx, ch, args) => { wp.push(args); if (/option get cwai_portal_build/.test(args)) return optionResult; if (/portal-login/.test(args)) return loginResult; return /^help cwai portal-build/.test(args) ? { code: cwai ? 0 : 1, out: '', err: '' } : { code: 0, out: '', err: '' }; },
 		runWpBackground: async (ctx, ch, args) => { bg.push(args); return { code: 0, out: 'started', err: '' }; },
 	};
 	const clients = {
@@ -40,7 +41,7 @@ function rig({ cwai = false, hostFails = false, autoDelete = false, golive = fal
 	};
 	const exporter = { enqueue: async (b) => { calls.enqueue.push(b); return { id: 'job1' }; }, get: () => job };
 	const p = createProspects({ store, clients, exporter, dataDir: dir, notify: async (m) => { mail.push(m); }, secret: 'k', now: () => clock.t, autoDelete, alertTo: ['boss@x.ca'], baseUrl: 'https://portal.test', engine, log: () => {} });
-	return { p, store, clock, mail, hostDeleted, bg, wp, st, job, calls, dir, golive, loginResult };
+	return { p, store, clock, mail, hostDeleted, bg, wp, st, job, calls, dir, golive, loginResult, optionResult };
 }
 const make = async (r, o = {}) => { const c = await r.p.create({ url: 'https://www.graceunited.ca/', contactEmail: 'office@grace.ca', mode: 'preview', ...o }, 'staff@x.ca'); return c; };
 
@@ -286,4 +287,19 @@ test('stop & restart: a build that is running or stuck is stopped on the site an
 	r.p.reportBuild(c.id, { state: 'done', message: 'ok' });
 	assert.equal(r.p.view(r.store.get(c.id)).canRestart, false);
 	await assert.rejects(() => r.p.restartBuild(c.id), /no build to restart/);
+});
+
+test('a silent build is asked directly: the site\'s own saved state shows the real error even if its messages never arrive', async () => {
+	const r = rig({ cwai: true }); const c = await make(r); r.p.start(c.id);
+	r.job.status = 'done'; for (let i = 0; i < 4; i++) await r.p.tick(c.id);
+	assert.equal(r.store.get(c.id).run.steps.build.state, 'working');
+	await r.p.tick(c.id); assert.equal(r.store.get(c.id).run.steps.build.state, 'working', 'not asked straight away');
+	r.clock.t += 90000;
+	Object.assign(r.optionResult, { code: 0, out: JSON.stringify({ state: 'failed', message: 'The portal did not send the package (HTTP 403).', updated: Math.floor(r.clock.t / 1000) }) });
+	await r.p.tick(c.id);
+	const b = r.store.get(c.id).run.steps.build; assert.equal(b.state, 'failed'); assert.match(b.message, /HTTP 403/); assert.equal(r.store.get(c.id).run.state, 'failed');
+	// stale state from an earlier run is ignored
+	r.p.start(c.id); await r.p.tick(c.id); r.clock.t += 90000;
+	Object.assign(r.optionResult, { out: JSON.stringify({ state: 'failed', message: 'old', updated: Math.floor((r.clock.t - 3600000) / 1000) }) });
+	await r.p.tick(c.id); assert.notEqual(r.store.get(c.id).run.steps.build.message, 'old');
 });
