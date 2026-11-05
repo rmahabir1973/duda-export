@@ -403,7 +403,7 @@ if (portal && portalDb && assistant) {
 }
 if (outreach) app.use('/api/outreach', outreachRouter({ need, outreach, loops, webhookSecret: LOOPS_WEBHOOK_SECRET }));
 app.get('/email', page('email.html'));
-app.get('/deploy', page('deploy.html'));
+app.get('/deploy', (req, res) => res.redirect('/prospects')); // the old 50-stage checklist is retired from the screens
 app.get('/prospects', page('prospects.html'));
 app.get('/directory', page('directory.html', { dbOnly: true }));
 app.get('/activity', page('activity.html', { dbOnly: true }));

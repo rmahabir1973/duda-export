@@ -7,6 +7,8 @@ import express from 'express';
 import { createStore } from '../deploy/store.mjs';
 import { createProspects, nameFromTitle, platformFromHtml, PREVIEW_DAYS } from '../deploy/prospects.mjs';
 import { buildBrief } from '../deploy/brief.mjs';
+import { extractDocument } from '../deploy/docs.mjs';
+import { zipSync, strToU8 } from 'fflate';
 import { applyOxygenLicense } from '../deploy/checks.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'pros-'));
@@ -20,13 +22,14 @@ function rig({ cwai = false, hostFails = false, autoDelete = false, golive = fal
 	const job = { status: 'queued', summary: { pages: 6, images: 14, zipMB: 3.2 }, lastLog: 'reading page 2', zipPath: path.join(dir, 'e.zip'), platform: 'DUDA' };
 	fs.writeFileSync(job.zipPath, 'zip');
 	const calls = { fix: [], enqueue: [] };
+	const loginResult = { code: 0, out: 'Success: hi\nhttps://grace-united-church.churchwebglobal.com/?cwai_login=' + 'a'.repeat(64) + '\n', err: '' };
 	const engine = {
 		STAGES: [{ key: 'preview', reqs: [{ id: 'a', label: 'a', fix: true }, { id: 'b', label: 'b', fix: true }, { id: 'c', label: 'c', fix: true }, { id: 'oxygen', label: 'Oxygen', manual: true }] }],
 		reqsFor: (s) => s.reqs, isSatisfied: (x) => OK.has(x),
 		testStage: async (ctx, ch) => ({ a: { state: st.a }, b: { state: st.b }, c: { state: st.c }, oxygen: { state: ch.stages?.preview?.manual?.oxygen ? 'ok' : 'no' } }),
 		fixReq: async (ctx, ch, stage, q) => { calls.fix.push(q.id); if (hostFails) return { ok: false, detail: 'Hostinger said no' }; st[q.id] = 'ok'; return { ok: true, detail: 'done' }; },
 		applyOxygenLicense: async () => ({ state: 'ok', detail: 'Added the Oxygen licence key to the site.' }),
-		runWp: async (ctx, ch, args) => { wp.push(args); return /^help cwai portal-build/.test(args) ? { code: cwai ? 0 : 1, out: '', err: '' } : { code: 0, out: '', err: '' }; },
+		runWp: async (ctx, ch, args) => { wp.push(args); if (/portal-login/.test(args)) return loginResult; return /^help cwai portal-build/.test(args) ? { code: cwai ? 0 : 1, out: '', err: '' } : { code: 0, out: '', err: '' }; },
 		runWpBackground: async (ctx, ch, args) => { bg.push(args); return { code: 0, out: 'started', err: '' }; },
 	};
 	const clients = {
@@ -37,7 +40,7 @@ function rig({ cwai = false, hostFails = false, autoDelete = false, golive = fal
 	};
 	const exporter = { enqueue: async (b) => { calls.enqueue.push(b); return { id: 'job1' }; }, get: () => job };
 	const p = createProspects({ store, clients, exporter, dataDir: dir, notify: async (m) => { mail.push(m); }, secret: 'k', now: () => clock.t, autoDelete, alertTo: ['boss@x.ca'], baseUrl: 'https://portal.test', engine, log: () => {} });
-	return { p, store, clock, mail, hostDeleted, bg, wp, st, job, calls, dir, golive };
+	return { p, store, clock, mail, hostDeleted, bg, wp, st, job, calls, dir, golive, loginResult };
 }
 const make = async (r, o = {}) => { const c = await r.p.create({ url: 'https://www.graceunited.ca/', contactEmail: 'office@grace.ca', mode: 'preview', ...o }, 'staff@x.ca'); return c; };
 
@@ -138,14 +141,49 @@ test('the plugin-facing endpoints need the token; the brief and the package are 
 	} finally { srv.close(); }
 });
 
-test('documents: stored, read into the brief when they are text, removed again; odd files refused', async () => {
+test('documents: stored, read into the brief, removed again; odd files refused', async () => {
 	const r = rig(); const c = await make(r);
-	r.p.addDoc(c.id, 'About us.txt', Buffer.from('We are a warm, traditional congregation.'));
-	r.p.addDoc(c.id, 'bulletin.pdf', Buffer.from('%PDF-1.4'));
-	assert.throws(() => r.p.addDoc(c.id, 'virus.exe', Buffer.from('x')), /Use a text/);
-	assert.throws(() => r.p.addDoc(c.id, 'big.txt', Buffer.alloc(11 * 1048576)), /over 10 MB/);
-	const brief = r.p.briefFor(r.store.get(c.id)); assert.match(brief, /warm, traditional/); assert.match(brief, /bulletin\.pdf/);
+	await r.p.addDoc(c.id, 'About us.txt', Buffer.from('We are a warm, traditional congregation.'));
+	await r.p.addDoc(c.id, 'scan.pdf', Buffer.from('%PDF-1.4 not really'));
+	await assert.rejects(() => r.p.addDoc(c.id, 'virus.exe', Buffer.from('x')), /Use a text/);
+	await assert.rejects(() => r.p.addDoc(c.id, 'big.txt', Buffer.alloc(11 * 1048576)), /over 10 MB/);
+	const brief = r.p.briefFor(r.store.get(c.id)); assert.match(brief, /warm, traditional/); assert.match(brief, /scan\.pdf/); assert.match(brief, /could not be read/);
+	const v = r.p.view(r.store.get(c.id)); assert.equal(v.docs[0].readable, true); assert.equal(v.docs[1].readable, false); assert.ok(v.docs[1].note);
 	r.p.removeDoc(c.id, 1); assert.doesNotMatch(r.p.briefFor(r.store.get(c.id)), /warm, traditional/);
+});
+
+const pdfOf = (text) => {
+	const objs = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>', '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>', null, '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>'];
+	const stream = `BT /F1 14 Tf 20 100 Td (${text}) Tj ET`;
+	objs[3] = `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`;
+	let out = '%PDF-1.4\n'; const off = [];
+	objs.forEach((o, i) => { off.push(out.length); out += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+	const x = out.length;
+	out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n` + off.map((n) => String(n).padStart(10, '0') + ' 00000 n \n').join('') + `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${x}\n%%EOF`;
+	return Buffer.from(out);
+};
+
+test('reading Word, Excel, OpenDocument, PDF and RTF files', async () => {
+	const docx = Buffer.from(zipSync({ 'word/document.xml': strToU8('<w:document><w:body><w:p><w:r><w:t>Sunday worship 10:30 am</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>Rev.</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Smith &amp; Co</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>') }));
+	let g = await extractDocument('service.docx', docx); assert.equal(g.readable, true); assert.match(g.text, /Sunday worship 10:30 am/); assert.match(g.text, /Rev\. \| Smith & Co/);
+
+	const xlsx = Buffer.from(zipSync({
+		'xl/workbook.xml': strToU8('<workbook><sheets><sheet name="Events" sheetId="1" r:id="rId1"/></sheets></workbook>'),
+		'xl/_rels/workbook.xml.rels': strToU8('<Relationships><Relationship Id="rId1" Type="x" Target="worksheets/sheet1.xml"/></Relationships>'),
+		'xl/sharedStrings.xml': strToU8('<sst><si><t>Event</t></si><si><t>Date</t></si><si><t>Bake sale</t></si></sst>'),
+		'xl/worksheets/sheet1.xml': strToU8('<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="C1" t="s"><v>1</v></c></row><row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2"><v>42</v></c><c r="C2" t="inlineStr"><is><t>June 5</t></is></c></row></sheetData></worksheet>'),
+	}));
+	g = await extractDocument('events.xlsx', xlsx); assert.equal(g.readable, true); assert.match(g.text, /## Sheet: Events/); assert.match(g.text, /Event \| \| Date/); assert.match(g.text, /Bake sale \| 42 \| June 5/);
+
+	const odt = Buffer.from(zipSync({ 'content.xml': strToU8('<office:text><text:h>Welcome</text:h><text:p>All are <text:s/>welcome.</text:p></office:text>') }));
+	g = await extractDocument('letter.odt', odt); assert.match(g.text, /Welcome\nAll are welcome\./);
+
+	g = await extractDocument('news.pdf', pdfOf('Choir practice Thursday')); assert.equal(g.readable, true); assert.match(g.text, /Choir practice Thursday/);
+	g = await extractDocument('memo.rtf', Buffer.from('{\\rtf1\\ansi {\\b Hello} church\\par Second line}')); assert.match(g.text, /Hello church\nSecond line/);
+
+	g = await extractDocument('old.doc', Buffer.from('x')); assert.equal(g.readable, false); assert.match(g.note, /save it as \.docx/i);
+	g = await extractDocument('broken.docx', Buffer.from('not a zip')); assert.equal(g.readable, false); assert.match(g.note, /Could not read/);
+	g = await extractDocument('empty.txt', Buffer.from('   ')); assert.equal(g.readable, false);
 });
 
 test('30-day clean-up: warns once at 7 and 2 days, leaves live and kept sites alone, deletes only when switched on', async () => {
@@ -154,7 +192,7 @@ test('30-day clean-up: warns once at 7 and 2 days, leaves live and kept sites al
 	await r.p.sweep(); await r.p.sweep(); assert.equal(r.mail.filter((m) => /deleted in 6 days/.test(m.subject)).length, 1);
 	r.clock.t += 5 * DAY; await r.p.sweep(); assert.equal(r.mail.filter((m) => /deleted in 1 day/.test(m.subject)).length, 1);
 	r.clock.t += 2 * DAY; const out = await r.p.sweep(); assert.equal(out.overdue, 1); assert.deepEqual(r.hostDeleted, [], 'automatic deletion is off by default'); assert.ok(r.store.get(c.id));
-	r.p.keep(c.id); assert.ok(r.store.get(c.id).prospect.expiresAt > r.clock.t + 29 * DAY); assert.equal(r.store.get(c.id).prospect.warned7, undefined);
+	r.p.extend(c.id, 7); assert.ok(r.store.get(c.id).prospect.expiresAt > r.clock.t + 6 * DAY && r.store.get(c.id).prospect.expiresAt <= r.clock.t + 7 * DAY + 1000); assert.equal(r.store.get(c.id).prospect.warned7, undefined);
 
 	const g = rig({ autoDelete: true }); const d = await make(g);
 	g.store.update(d.id, (x) => { x.prospect.expiresAt = g.clock.t - DAY; });
@@ -172,4 +210,57 @@ test('applyOxygenLicense writes the key as a constant, never shows it, and says 
 	assert.equal((await applyOxygenLicense(mk(''), ch)).state, 'unknown');
 	const r = await applyOxygenLicense(mk('SECRETKEY123'), ch);
 	assert.equal(r.state, 'ok'); assert.ok(calls.some((c) => /config set OXYGEN_LICENSE_KEY 'SECRETKEY123' --type=constant/.test(c))); assert.doesNotMatch(JSON.stringify(r), /SECRETKEY123/);
+});
+
+async function readyRig(o = {}) {
+	const r = rig({ cwai: true, ...o }); const c = await make(r); r.p.start(c.id);
+	r.job.status = 'done'; for (let i = 0; i < 4; i++) await r.p.tick(c.id);
+	r.p.reportBuild(c.id, { state: 'done', message: 'Built.' });
+	return { r, c };
+}
+
+test('extend: +7 days at a time, from the current end, never past 30 days from today', async () => {
+	const { r, c } = await readyRig();
+	r.store.update(c.id, (x) => { x.prospect.expiresAt = r.clock.t + 3 * DAY; });
+	let v = r.p.view(r.p.extend(c.id)); assert.equal(v.daysLeft, 10);
+	r.p.extend(c.id, 7); r.p.extend(c.id, 7); assert.equal(r.p.view(r.store.get(c.id)).daysLeft, 24);
+	v = r.p.view(r.p.extend(c.id, 7)); assert.equal(v.daysLeft, 30, 'capped at 30 days from today');
+	assert.throws(() => r.p.extend(c.id), /most it can have/);
+	r.store.update(c.id, (x) => { x.prospect.expiresAt = r.clock.t - 2 * DAY; });
+	assert.equal(r.p.view(r.p.extend(c.id)).daysLeft, 7, 'an overdue preview restarts from today');
+});
+
+test('delete from the dashboard removes the Hostinger site and the record; live sites are refused', async () => {
+	const { r, c } = await readyRig();
+	assert.equal(r.p.view(r.store.get(c.id)).canDelete, true);
+	await r.p.remove(c.id); assert.deepEqual(r.hostDeleted, ['grace-united-church.churchwebglobal.com']); assert.equal(r.store.get(c.id), null);
+	const g = await readyRig(); g.r.store.update(g.c.id, (x) => { x.stages.golive = { done: true }; });
+	assert.equal(g.r.p.view(g.r.store.get(g.c.id)).canDelete, false);
+	await assert.rejects(() => g.r.p.remove(g.c.id), /live or is a template/); assert.ok(g.r.store.get(g.c.id));
+});
+
+test('switch to the full site: same site, fresh full export, the build adds the rest in the same design', async () => {
+	const { r, c } = await readyRig();
+	let v = r.p.view(r.store.get(c.id)); assert.equal(v.canFull, true); assert.equal(v.mode, 'preview');
+	const buildsBefore = r.bg.length, fixesBefore = r.calls.fix.length;
+	r.p.switchToFull(c.id);
+	v = r.p.view(r.store.get(c.id)); assert.equal(v.mode, 'full'); assert.equal(v.canFull, false); assert.equal(v.stages[2].state, 'done', 'the site is kept'); assert.equal(v.stages[1].state, 'waiting'); assert.equal(v.zipReady, false);
+	await r.p.tick(c.id); assert.equal(r.calls.enqueue.at(-1).preview, false, 'a full export is queued'); r.job.status = 'done'; await r.p.tick(c.id);
+	await r.p.tick(c.id); await r.p.tick(c.id);
+	assert.equal(r.calls.fix.length, fixesBefore, 'no new site is made'); assert.equal(r.bg.length, buildsBefore + 1); assert.match(r.bg.at(-1), /--mode=full/); assert.match(r.bg.at(-1), /--package=/);
+	const brief = r.p.briefFor(r.store.get(c.id)); assert.match(brief, /Keep that design/); assert.match(brief, /Build every page/);
+	assert.throws(() => r.p.switchToFull(c.id), /already set to the full site/);
+	const p = await readyRig(); p.r.store.update(p.c.id, (x) => { x.run.state = 'running'; });
+	assert.throws(() => p.r.p.switchToFull(p.c.id), /Wait for the current step/);
+});
+
+test('one-click WP-Admin link: asks the site for it, only accepts a link for that site', async () => {
+	const { r, c } = await readyRig();
+	assert.equal(r.p.view(r.store.get(c.id)).canLogin, true);
+	const out = await r.p.adminLink(c.id); assert.match(out.url, /^https:\/\/grace-united-church\.churchwebglobal\.com\/\?cwai_login=a{64}$/); assert.ok(r.wp.includes('cwai portal-login'));
+	r.loginResult.out = 'https://evil.example/?cwai_login=' + 'b'.repeat(64);
+	await assert.rejects(() => r.p.adminLink(c.id), /different address/);
+	r.loginResult.code = 1; r.loginResult.out = ''; r.loginResult.err = "Error: 'portal-login' is not a registered wp command.";
+	await assert.rejects(() => r.p.adminLink(c.id), /1\.12\.0/);
+	const n = rig(); const d = await make(n); await assert.rejects(() => n.p.adminLink(d.id), /not ready/);
 });

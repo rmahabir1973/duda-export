@@ -8,6 +8,7 @@ import express from 'express';
 import * as realChecks from './checks.mjs';
 import { configured, shq } from './clients.mjs';
 import { slugify, normDomain, SLUG_RE, DOMAIN_RE } from './store.mjs';
+import { extractDocument } from './docs.mjs';
 import { buildBrief } from './brief.mjs';
 
 const DAY = 86400000;
@@ -16,8 +17,8 @@ const FIX_WAIT_MS = 180000; // after a fix that was accepted, give Hostinger thi
 const MAX_ATTEMPTS = 3;
 const BUILD_SILENCE_MS = 25 * 60000; // the build stopped reporting
 const DOC_EXT = /\.(txt|md|csv|html?|rtf|pdf|docx?|odt|xlsx?)$/i;
-const TEXT_EXT = /\.(txt|md|csv|html?)$/i;
 const MAX_DOC = 10 * 1048576;
+const EXTEND_DAYS = 7;
 
 /** What the screen says while each preview-site step is being done. */
 const DOING = {
@@ -159,7 +160,7 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 		return engine.runWpBackground(ctx, ch, parts.join(' '), ch.slug);
 	}
 	const previewHost = (ch) => `${ch.slug}.${clients.cfg.previewDomain}`;
-	const briefFor = (ch) => buildBrief({ name: ch.name, domain: ch.prospect.domain, platform: ch.prospect.platform, mode: ch.prospect.mode, notes: ch.prospect.notes, docs: ch.prospect.docs });
+	const briefFor = (ch) => buildBrief({ name: ch.name, domain: ch.prospect.domain, platform: ch.prospect.platform, mode: ch.prospect.mode, notes: ch.prospect.notes, docs: ch.prospect.docs, existing: !!ch.prospect.switchedAt });
 	async function stepBuild(ch) {
 		const run = ch.run, b = run.steps.build;
 		if (b.state === 'done' || b.state === 'needs_input') return false;
@@ -273,7 +274,7 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 		store.update(c.id, (x) => { x.prospect = { url: String(url).trim(), domain: d.domain, mode: mode === 'full' ? 'full' : 'preview', platform: d.platform, notes: String(notes || '').slice(0, 2000), docs: [], createdAt: now() }; x.run = blankRun(); });
 		return store.get(c.id);
 	}
-	function addDoc(id, filename, buf) {
+	async function addDoc(id, filename, buf) {
 		const ch = store.get(id); if (!ch?.prospect) throw new Error('Not a prospect.');
 		const name = path.basename(String(filename || '')).replace(/[^\w.\- ()]/g, '_').slice(0, 100);
 		if (!DOC_EXT.test(name)) throw new Error('Use a text, Word, PDF, spreadsheet or HTML file.');
@@ -283,8 +284,8 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 		fs.mkdirSync(path.join(dir(id), 'docs'), { recursive: true });
 		const n = (ch.prospect.docs || []).reduce((m, d) => Math.max(m, d.n), 0) + 1;
 		fs.writeFileSync(path.join(dir(id), 'docs', `${n}-${name}`), buf);
-		const text = TEXT_EXT.test(name) ? buf.toString('utf8').replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 20000) : '';
-		store.update(id, (c) => { c.prospect.docs.push({ n, name, size: buf.length, text }); });
+		const got = await extractDocument(name, buf);
+		store.update(id, (c) => { c.prospect.docs.push({ n, name, size: buf.length, text: got.text, readable: got.readable, note: got.note }); });
 		return store.get(id);
 	}
 	function removeDoc(id, n) {
@@ -308,11 +309,15 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 		const headline = !cur ? 'Preview ready' : (cur.message || (cur.state === 'waiting' ? 'Waiting to start' : ''));
 		return {
 			id: ch.id, name: ch.name, domain: p.domain, mode: p.mode, platform: p.platform || '', contactEmail: ch.contactEmail || '', createdAt: p.createdAt, createdBy: ch.createdBy || '',
-			runState: run.state, headline, stages, currentStage: cur?.key || 'ready', docs: (p.docs || []).map((d) => ({ n: d.n, name: d.name, size: d.size })),
+			runState: run.state, headline, stages, currentStage: cur?.key || 'ready', docs: (p.docs || []).map((d) => ({ n: d.n, name: d.name, size: d.size, readable: !!d.readable, note: d.note || '' })),
 			previewUrl: s.site.state === 'done' ? `https://${previewHost(ch)}` : '', expiresAt: p.expiresAt || null, daysLeft: left, kept: !!p.kept, exported: p.exported || null,
 			canStart: ['idle', 'failed', 'waiting'].includes(run.state), canRetry: run.state === 'failed' || s.build.state === 'blocked',
 			zipReady: fs.existsSync(path.join(dir(ch.id), 'export.zip')),
 			question: s.build.state === 'needs_input' ? s.build.question : null,
+			notes: p.notes || '', url: p.url || '', siteReadyAt: p.siteReadyAt || null, switchedAt: p.switchedAt || null, slug: ch.slug,
+			canFull: p.mode !== 'full' && s.build.state === 'done' && run.state === 'done',
+			canLogin: s.site.state === 'done',
+			canDelete: !ch.stages?.golive?.done,
 		};
 	}
 
@@ -336,17 +341,60 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 			const flag = (k) => { if (p[k]) return false; store.update(ch.id, (c) => { c.prospect[k] = now(); }); return true; };
 			if (left <= 0) {
 				if (autoDelete) { try { const r = await removePreview(ch); if (r.deleted) { out.deleted++; await tell(ch, `Preview deleted: ${ch.name}`, `The preview for ${ch.name} reached 30 days and was deleted.`); } } catch (e) { log('prospects sweep:', e.message); } }
-				else if (flag('overdueNotified')) { out.overdue++; await tell(ch, `Preview is past its 30 days: ${ch.name}`, `${previewHost(ch)} is past its 30 days. Automatic deletion is switched off (PROSPECT_AUTODELETE), so it was left alone. Delete it in the portal or press Keep longer.`, true); }
-			} else if (left <= 2 && flag('warned2')) { out.warned++; await tell(ch, `Preview deleted in ${left} day${left === 1 ? '' : 's'}: ${ch.name}`, `${previewHost(ch)} will be deleted on ${new Date(p.expiresAt).toISOString().slice(0, 10)}. Open Prospects and press Keep longer to save it.`); }
-			else if (left <= 7 && flag('warned7')) { out.warned++; await tell(ch, `Preview deleted in ${left} days: ${ch.name}`, `${previewHost(ch)} will be deleted on ${new Date(p.expiresAt).toISOString().slice(0, 10)}. Open Prospects and press Keep longer to save it.`); }
+				else if (flag('overdueNotified')) { out.overdue++; await tell(ch, `Preview is past its 30 days: ${ch.name}`, `${previewHost(ch)} is past its 30 days. Automatic deletion is switched off (PROSPECT_AUTODELETE), so it was left alone. Delete it in the portal or press +7 days.`, true); }
+			} else if (left <= 2 && flag('warned2')) { out.warned++; await tell(ch, `Preview deleted in ${left} day${left === 1 ? '' : 's'}: ${ch.name}`, `${previewHost(ch)} will be deleted on ${new Date(p.expiresAt).toISOString().slice(0, 10)}. Open Prospects and press +7 days to save it.`); }
+			else if (left <= 7 && flag('warned7')) { out.warned++; await tell(ch, `Preview deleted in ${left} days: ${ch.name}`, `${previewHost(ch)} will be deleted on ${new Date(p.expiresAt).toISOString().slice(0, 10)}. Open Prospects and press +7 days to save it.`); }
 		}
 		return out;
 	}
-	function keep(id) {
+	/** Give a preview more time. 7 days at a time by default, and never more than 30 days from today, so nothing is kept forever by accident. */
+	function extend(id, days = EXTEND_DAYS) {
 		const ch = store.get(id); if (!ch?.prospect) throw new Error('Not a prospect.');
-		store.update(id, (c) => { c.prospect.expiresAt = Math.max(c.prospect.expiresAt || now(), now()) + PREVIEW_DAYS * DAY; c.prospect.kept = false; for (const k of ['warned7', 'warned2', 'overdueNotified']) delete c.prospect[k]; });
-		note(id, 'Preview kept 30 more days');
+		const d = Math.max(1, Math.min(30, Math.round(Number(days) || EXTEND_DAYS)));
+		const base = Math.max(ch.prospect.expiresAt || now(), now()), cap = now() + PREVIEW_DAYS * DAY;
+		if (base >= cap) throw new Error('This preview already has 30 days left, which is the most it can have.');
+		store.update(id, (c) => { c.prospect.expiresAt = Math.min(base + d * DAY, cap); c.prospect.kept = false; for (const k of ['warned7', 'warned2', 'overdueNotified']) delete c.prospect[k]; });
+		note(id, `Preview extended by ${d} day${d === 1 ? '' : 's'}`);
 		return store.get(id);
+	}
+	const keep = (id) => extend(id, EXTEND_DAYS);
+
+	/** Delete the preview site and the church record, from the dashboard. */
+	async function remove(id) {
+		const ch = store.get(id); if (!ch?.prospect) throw new Error('Not a prospect.');
+		const r = await removePreview(ch);
+		if (!r.deleted) throw new Error(r.skipped === 'protected' ? 'This site is live or is a template, so it can\'t be deleted here.' : `Could not delete: ${r.skipped}.`);
+		return r;
+	}
+
+	/** Keep the same preview site and carry on to the whole thing: a fresh full export, then the build adds the rest in the same design. */
+	function switchToFull(id) {
+		const ch = store.get(id); if (!ch?.prospect) throw new Error('Not a prospect.');
+		if (ch.prospect.mode === 'full') throw new Error('This church is already set to the full site.');
+		if (ch.run?.steps.site.state !== 'done') throw new Error('Wait until the preview site has been created.');
+		if (['running', 'needs_input'].includes(ch.run.state)) throw new Error('Wait for the current step to finish first.');
+		try { fs.rmSync(path.join(dir(id), 'export.zip'), { force: true }); } catch { /* ignore */ }
+		store.update(id, (c) => { c.prospect.mode = 'full'; c.prospect.switchedAt = now(); });
+		patch(id, (r) => {
+			r.state = 'running'; r.exportJobId = null; r.answers = {}; r.attempts = {}; r.lastFix = {}; r.buildStartedAt = null; r.buildHeardAt = null;
+			r.steps.export = { state: 'waiting', message: '', pct: null };
+			r.steps.build = { state: 'waiting', message: '', pct: null };
+		});
+		note(id, 'Switched to the full site');
+		return store.get(id);
+	}
+
+	/** One-click sign-in to the church's WordPress admin: ask the site for a single-use link. */
+	async function adminLink(id) {
+		const ch = store.get(id); if (!ch?.prospect) throw new Error('Not a prospect.');
+		if (ch.run?.steps.site.state !== 'done') throw new Error('The site is not ready yet.');
+		const ctx = ctxFor();
+		const r = await engine.runWp(ctx, ch, 'cwai portal-login');
+		if (r.unavailable) throw new Error('Hostinger SSH isn\'t set up on this server.');
+		const url = String(r.out || '').split('\n').map((x) => x.trim()).reverse().find((x) => /^https:\/\/\S+cwai_login=/.test(x));
+		if (r.code !== 0 || !url) throw new Error(/not a registered wp command|is not a registered/i.test(`${r.err}${r.out}`) ? 'This site needs the AI Assistant plugin 1.12.0 or newer for one-click sign-in. Use the password under Details for now.' : plain('Could not make a sign-in link. ' + (r.err || r.out || '')));
+		try { if (new URL(url).hostname !== previewHost(ch)) throw new Error('x'); } catch { throw new Error('The site gave back a link for a different address, so it was not used.'); }
+		return { url };
 	}
 
 	/* ------------------------------------------------------------ routes */
@@ -362,7 +410,11 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 		r.post('/:id/run', wrap(async (req, res) => { if (!pick(req, res)) return; start(req.params.id); tick(req.params.id); res.json(view(store.get(req.params.id))); }));
 		r.post('/:id/answer', wrap(async (req, res) => { if (!pick(req, res)) return; answer(req.params.id, req.body?.questionId, req.body?.answer); res.json(view(store.get(req.params.id))); }));
 		r.post('/:id/keep', wrap(async (req, res) => { if (!pick(req, res)) return; res.json(view(keep(req.params.id))); }));
-		r.post('/:id/docs', express.raw({ type: () => true, limit: MAX_DOC + 1024 }), wrap(async (req, res) => { if (!pick(req, res)) return; res.json(view(addDoc(req.params.id, decodeURIComponent(req.get('x-filename') || ''), req.body))); }));
+		r.post('/:id/extend', wrap(async (req, res) => { if (!pick(req, res)) return; res.json(view(extend(req.params.id, req.body?.days))); }));
+		r.post('/:id/full', wrap(async (req, res) => { if (!pick(req, res)) return; switchToFull(req.params.id); tick(req.params.id); res.json(view(store.get(req.params.id))); }));
+		r.post('/:id/login', wrap(async (req, res) => { if (!pick(req, res)) return; res.json(await adminLink(req.params.id)); }));
+		r.delete('/:id', wrap(async (req, res) => { if (!pick(req, res)) return; await remove(req.params.id); res.json({ deleted: true }); }));
+		r.post('/:id/docs', express.raw({ type: () => true, limit: MAX_DOC + 1024 }), wrap(async (req, res) => { if (!pick(req, res)) return; res.json(view(await addDoc(req.params.id, decodeURIComponent(req.get('x-filename') || ''), req.body))); }));
 		r.delete('/:id/docs/:n', wrap(async (req, res) => { if (!pick(req, res)) return; removeDoc(req.params.id, req.params.n); res.json(view(store.get(req.params.id))); }));
 		r.get('/:id/package', (req, res) => { const c = pick(req, res); if (!c) return; const f = path.join(dir(c.id), 'export.zip'); if (!fs.existsSync(f)) return res.status(404).json({ error: 'No export yet.' }); res.download(f, `${c.slug}-export.zip`); });
 		r.get('/:id/admin-login', (req, res) => { const c = pick(req, res); if (!c) return; if (req.user && req.user.role !== 'admin') return res.status(403).json({ error: 'Admins only.' }); res.json({ url: `https://${previewHost(c)}/wp-admin`, login: 'cwadmin', password: adminPw(c) }); });
@@ -396,5 +448,5 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 	};
 	const stopTimers = () => { for (const t of timers) { clearInterval(t); clearTimeout(t); } timers = []; };
 
-	return { create, detect, start, tick, tickAll, reportBuild, answer, addDoc, removeDoc, keep, sweep, view, router, buildRouter, sign, verify, startTimers, stopTimers, briefFor };
+	return { create, detect, start, tick, tickAll, reportBuild, answer, addDoc, removeDoc, keep, extend, remove, switchToFull, adminLink, sweep, view, router, buildRouter, sign, verify, startTimers, stopTimers, briefFor };
 }
