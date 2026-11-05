@@ -19,7 +19,7 @@ const BUILD_SILENCE_MS = 25 * 60000; // the build stopped reporting
 const DOC_EXT = /\.(txt|md|csv|html?|rtf|pdf|docx?|odt|xlsx?)$/i;
 const MAX_DOC = 10 * 1048576;
 const EXTEND_DAYS = 7;
-const POLL_AFTER_MS = 60000, POLL_EVERY_MS = 45000;
+const POLL_AFTER_MS = 15000, POLL_EVERY_MS = 15000;
 // A preview lives on *.churchwebglobal.com, which already resolves through the wildcard record, so the portal never touches DNS for it. DNS comes back at go-live.
 // The Hostinger plugins are removed last, after the build, because removing them first stalled on some sites.
 const SKIP_REQS = new Set(['dns', 'hostingerPlugins']);
@@ -162,8 +162,23 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 	async function triggerBuild(ch, ctx, { resume = false, answer = '' } = {}) {
 		const tok = sign(ch.id), q = (p) => `${baseUrl}/api/build/${ch.id}/${p}?t=${encodeURIComponent(tok)}`;
 		const parts = ['cwai portal-build', `--callback=${shq(`${baseUrl}/api/build/${ch.id}/status`)}`, `--token=${shq(tok)}`, `--mode=${ch.prospect.mode === 'full' ? 'full' : 'preview'}`];
-		if (resume) parts.push('--resume', `--answer=${shq(answer)}`); else parts.push(`--package=${shq(q('package.zip'))}`, `--brief=${shq(q('brief.md'))}`);
+		const paths = ch.run?.pushed;
+		if (resume) parts.push('--resume', `--answer=${shq(answer)}`); else parts.push(`--package=${shq(paths?.package || q('package.zip'))}`, `--brief=${shq(paths?.brief || q('brief.md'))}`);
 		return engine.runWpBackground(ctx, ch, parts.join(' '), ch.slug);
+	}
+	/** Put the ZIP and the brief on the site's server over SSH, so the site never has to reach the portal to get them. */
+	async function pushFiles(ch) {
+		const ssh = clients.ssh;
+		if (!ssh?.available?.()) return null;
+		const home = String((await ssh.exec('echo $HOME', { timeout: 20000 })).out || '').trim();
+		if (!/^\/[\w./-]+$/.test(home)) throw new Error('Could not find the home folder on the server.');
+		const d = `${home}/cwai-portal/${ch.slug}`, put = async (name, buf) => {
+			const r = await ssh.exec(`mkdir -p ${shq(d)} && cat > ${shq(`${d}/${name}`)} && wc -c < ${shq(`${d}/${name}`)}`, { input: buf, timeout: 600000 });
+			if (r.code !== 0 || Number(String(r.out).trim()) !== buf.length) throw new Error(`Could not copy ${name} to the site (${String(r.err || r.out).trim().slice(-120)}).`);
+		};
+		await put('package.zip', fs.readFileSync(path.join(dir(ch.id), 'export.zip')));
+		await put('brief.md', Buffer.from(briefFor(ch)));
+		return { package: `${d}/package.zip`, brief: `${d}/brief.md` };
 	}
 	const previewHost = (ch) => `${ch.slug}.${clients.cfg.previewDomain}`;
 	const briefFor = (ch) => buildBrief({ name: ch.name, domain: ch.prospect.domain, platform: ch.prospect.platform, mode: ch.prospect.mode, notes: ch.prospect.notes, docs: ch.prospect.docs, existing: !!ch.prospect.switchedAt });
@@ -177,8 +192,10 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 				try {
 					const o = await engine.runWp(ctxFor(), ch, 'option get cwai_portal_build --format=json');
 					const st = o.code === 0 ? JSON.parse(String(o.out || '').trim().split('\n').pop() || '{}') : null;
-					if (st && Number(st.updated) * 1000 >= run.buildStartedAt - 5000 && ['failed', 'done', 'working'].includes(st.state) && (st.message || st.state !== 'working')) {
-						reportBuild(ch.id, { state: st.state, message: st.state === 'failed' ? `${st.message || 'The build failed.'}` : st.message, pct: st.pct });
+					if (st && Number(st.updated) * 1000 >= run.buildStartedAt - 5000 && ['failed', 'done', 'working', 'question'].includes(st.state) && (st.message || st.state !== 'working')) {
+						const seen = run.steps.build;
+						if (st.state === 'working' && st.message === seen.message && st.pct === seen.pct) return false; // nothing new
+						reportBuild(ch.id, { state: st.state, message: st.message, pct: st.pct, question: st.question });
 						return true;
 					}
 				} catch { /* the normal timeout below still applies */ }
@@ -196,9 +213,11 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 			note(ch.id, 'Build waiting for the plugin\'s portal-build command', 'warn');
 			return true;
 		}
+		try { const pushed = await pushFiles(ch); patch(ch.id, (rr) => { rr.pushed = pushed; }); ch = store.get(ch.id); }
+		catch (e) { setStep(ch.id, 'build', { state: 'failed', message: plain(e.message) }, { state: 'failed' }); return true; }
 		const r = await triggerBuild(ch, ctx, {});
 		if (r.code !== 0) { setStep(ch.id, 'build', { state: 'failed', message: plain('Could not start the build. ' + (r.err || r.out || '')) }, { state: 'failed' }); return true; }
-		patch(ch.id, (rr) => { rr.buildStartedAt = now(); rr.buildHeardAt = now(); rr.steps.build = { state: 'working', message: 'Importing the content and starting the design…', pct: 5 }; });
+		patch(ch.id, (rr) => { rr.buildStartedAt = now(); rr.buildHeardAt = now(); rr.polledAt = 0; rr.steps.build = { state: 'working', message: 'Importing the content and starting the design…', pct: 5 }; });
 		note(ch.id, 'Build started');
 		return true;
 	}
@@ -414,7 +433,7 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 		try { fs.rmSync(path.join(dir(id), 'export.zip'), { force: true }); } catch { /* ignore */ }
 		store.update(id, (c) => { c.prospect.mode = 'full'; c.prospect.switchedAt = now(); });
 		patch(id, (r) => {
-			r.state = 'running'; r.exportJobId = null; r.answers = {}; r.attempts = {}; r.lastFix = {}; r.buildStartedAt = null; r.buildHeardAt = null;
+			r.state = 'running'; r.exportJobId = null; r.answers = {}; r.pushed = null; r.attempts = {}; r.lastFix = {}; r.buildStartedAt = null; r.buildHeardAt = null;
 			r.steps.export = { state: 'waiting', message: '', pct: null };
 			r.steps.build = { state: 'waiting', message: '', pct: null };
 		});
@@ -429,7 +448,7 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 		if (!['working', 'needs_input', 'blocked', 'failed'].includes(ch.run.steps.build.state)) throw new Error('There is no build to restart.');
 		const ssh = clients.ssh;
 		if (ssh?.available?.()) { try { await ssh.exec(`pkill -f ${shq(`[a]pi/build/${id}/status`)}; rm -f $HOME/cwai-portal-${ch.slug}.log; echo stopped`, { timeout: 20000 }); } catch { /* it may already have ended */ } }
-		patch(id, (r) => { r.state = 'running'; r.answers = {}; r.buildStartedAt = null; r.buildHeardAt = null; r.attempts = {}; r.lastFix = {}; r.steps.build = { state: 'waiting', message: '', pct: null }; });
+		patch(id, (r) => { r.state = 'running'; r.answers = {}; r.pushed = null; r.buildStartedAt = null; r.buildHeardAt = null; r.attempts = {}; r.lastFix = {}; r.steps.build = { state: 'waiting', message: '', pct: null }; });
 		note(id, 'Build restarted by a person');
 		return store.get(id);
 	}
