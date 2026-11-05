@@ -368,7 +368,8 @@ const prospects = createProspects({
 });
 app.use('/api/prospects', prospects.router({ need }));
 app.use('/api/build', prospects.buildRouter());
-const customers = createCustomers({ store: deployStore, ctxFor: prospects.ctxFor, engine: deployEngine });
+const supportFrom = (env.SUPPORT_FROM || 'support@churchwebglobal.com').trim();
+const customers = createCustomers({ store: deployStore, ctxFor: prospects.ctxFor, engine: deployEngine, from: supportFrom, send: deployClients.cfg.postmarkServerToken ? (m) => deployClients.postmark.sendEmail(m) : null });
 app.use('/api/customers', customers.router({ need }));
 if (String(env.PROSPECTS_RUN || 'on').toLowerCase() !== 'off') prospects.startTimers();
 const hosted = portal && portalDb ? createHosted({ db: portalDb, clients: deployClients, duda: makeDudaMcp({ token: (env.DUDA_MCP_TOKEN || '').trim() }), dir: portal.dir, ownDomains: (env.OWN_DOMAINS || 'churchwebglobal.com,churchwebsupport.com').split(',').map((x) => x.trim()).filter(Boolean), previewDomain: deployClients.cfg.previewDomain }) : null;
