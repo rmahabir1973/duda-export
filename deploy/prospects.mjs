@@ -421,7 +421,7 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 			notes: p.notes || '', url: p.url || '', siteReadyAt: p.siteReadyAt || null, switchedAt: p.switchedAt || null, slug: ch.slug,
 			canFull: p.mode !== 'full' && s.build.state === 'done' && run.state === 'done',
 			canLogin: s.site.state === 'done',
-			canDelete: !ch.stages?.golive?.done,
+			canDelete: !ch.stages?.golive?.done, customer: !!ch.customer,
 			canRestart: s.site.state === 'done' && ['working', 'needs_input', 'blocked'].includes(s.build.state),
 			tidy: run.cleanup ? { state: run.cleanup.state, message: run.cleanup.message } : null,
 			cost: costView(ch),
@@ -579,5 +579,5 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 	};
 	const stopTimers = () => { for (const t of timers) { clearInterval(t); clearTimeout(t); } timers = []; };
 
-	return { create, detect, start, tick, tickAll, costRefresh, costSummary, reportBuild, answer, cleanup, restartBuild, addDoc, removeDoc, keep, extend, licence, remove, switchToFull, adminLink, sweep, view, router, buildRouter, sign, verify, startTimers, stopTimers, briefFor };
+	return { ctxFor, create, detect, start, tick, tickAll, costRefresh, costSummary, reportBuild, answer, cleanup, restartBuild, addDoc, removeDoc, keep, extend, licence, remove, switchToFull, adminLink, sweep, view, router, buildRouter, sign, verify, startTimers, stopTimers, briefFor };
 }

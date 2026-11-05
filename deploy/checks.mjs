@@ -3,6 +3,7 @@
 // Tests only read. Fixes only run when someone presses the button, and only for a requirement that tested "no".
 import { classifyDns, planWebRecords, mergeSpf, planPostmarkRecords, planMailRecords } from './dnscheck.mjs';
 import { shq, randomPassword } from './clients.mjs';
+import { buildDnsPlan } from './dnsplan.mjs';
 
 /* ------------------------------------------------------------------ small helpers */
 const R = (state, detail = '') => ({ state, detail });
@@ -70,6 +71,18 @@ export async function releaseOxygenLicense(ctx, ch) {
 	try { const s = await siteOf(ctx, ch); if (s.unavailable || s.missing) return false; const r = await wpRun(ctx, s.host, `eval ${shq('\\Breakdance\\Licensing\\LicenseKeyManager::getInstance()->deactivateLicense();')}`); return r.code === 0; } catch { return false; }
 }
 
+
+/** What we would put in DNS for this customer. Looks only; changes nothing. */
+export async function customerPlan(ctx, ch) {
+	const cfg = ctx.c.cfg, cf = ctx.c.cloudflare;
+	if (!ch.domain) throw new Error('This customer has no domain yet.');
+	const z = cf.available() ? await zoneOf(ctx, ch.domain) : null;
+	const existing = z ? await cfRecords(ctx, z.id) : [];
+	const inv = existing.length ? [] : await inventory(ctx, ch.domain);
+	let nameservers = []; if (z) { try { nameservers = (await cf.zone(z.id)).name_servers || []; } catch { /* shown later */ } }
+	const email = ch.plan === 'email';
+	return { domain: ch.domain, zone: !!z, zoneStatus: z?.status || '', nameservers, hostingerIp: cfg.hostingerIp || '', cloudflare: cf.available(), copiedFromPublic: inv.length, lines: buildDnsPlan({ domain: ch.domain, hostingerIp: cfg.hostingerIp, email, mailIp: cfg.mailIp, autodiscover: cfg.autodiscoverTarget, autoconfig: cfg.autoconfigTarget, existing, inventory: inv, dmarcRua: cfg.dmarcRua }) };
+}
 
 /** Run one WP-CLI command on a church's preview site. Returns { code, out, err } or { unavailable } / { missing }. */
 export async function runWp(ctx, ch, args) {

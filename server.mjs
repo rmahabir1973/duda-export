@@ -11,6 +11,8 @@ import { createStore } from './deploy/store.mjs';
 import { configFromEnv, makeClients } from './deploy/clients.mjs';
 import { createDeployRouter } from './deploy/routes.mjs';
 import { createProspects } from './deploy/prospects.mjs';
+import { createCustomers } from './deploy/customers.mjs';
+import * as deployEngine from './deploy/checks.mjs';
 import { createEmailRouter } from './deploy/emailroutes.mjs';
 import { connectDb, migrate } from './portal/db.mjs';
 import { createPortal } from './portal/routes.mjs';
@@ -366,6 +368,8 @@ const prospects = createProspects({
 });
 app.use('/api/prospects', prospects.router({ need }));
 app.use('/api/build', prospects.buildRouter());
+const customers = createCustomers({ store: deployStore, ctxFor: prospects.ctxFor, engine: deployEngine });
+app.use('/api/customers', customers.router({ need }));
 if (String(env.PROSPECTS_RUN || 'on').toLowerCase() !== 'off') prospects.startTimers();
 const hosted = portal && portalDb ? createHosted({ db: portalDb, clients: deployClients, duda: makeDudaMcp({ token: (env.DUDA_MCP_TOKEN || '').trim() }), dir: portal.dir, ownDomains: (env.OWN_DOMAINS || 'churchwebglobal.com,churchwebsupport.com').split(',').map((x) => x.trim()).filter(Boolean), previewDomain: deployClients.cfg.previewDomain }) : null;
 if (hosted) {
@@ -405,6 +409,7 @@ if (outreach) app.use('/api/outreach', outreachRouter({ need, outreach, loops, w
 app.get('/email', page('email.html'));
 app.get('/deploy', (req, res) => res.redirect('/prospects')); // the old 50-stage checklist is retired from the screens
 app.get('/prospects', page('prospects.html'));
+app.get('/customers', page('customers.html'));
 app.get('/directory', page('directory.html', { dbOnly: true }));
 app.get('/activity', page('activity.html', { dbOnly: true }));
 app.get('/domains', page('domains.html', { dbOnly: true }));
