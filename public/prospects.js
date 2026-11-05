@@ -10,7 +10,7 @@ const api = async (path, opts = {}) => {
 };
 const ICON = { done: '✔', working: '●', failed: '!', needs_input: '?', blocked: '⏸', waiting: '○' };
 const WORDS = { done: 'Done', working: 'Working', failed: 'Stopped', needs_input: 'Needs you', blocked: 'Waiting', waiting: '' };
-let seen = false, rows = [], costs = null, me = null, openCards = new Set(), confirmDel = null, confirmFull = null, confirmRestart = null, answers = {}, adminShown = {}, timer = null, typing = false;
+let custOpen = null, custForm = { dns: '', email: false }, seen = false, rows = [], costs = null, me = null, openCards = new Set(), confirmDel = null, confirmFull = null, confirmRestart = null, answers = {}, adminShown = {}, timer = null, typing = false;
 
 const stageHtml = (s) => `<li class="st ${s.state}" title="${esc(s.message || '')}"><span class="ic">${ICON[s.state] || '○'}</span><span class="tt">${esc(s.title)}</span>${WORDS[s.state] ? `<small>${WORDS[s.state]}</small>` : ''}</li>`;
 const fmtDate = (t) => t ? new Date(t).toLocaleDateString('en-CA', { year: 'numeric', month: 'short', day: 'numeric' }) : '';
@@ -54,8 +54,20 @@ function actions(c) {
 	if (c.canFull) out.push(confirmFull === c.id ? `<button class="sm primary" data-full2="${c.id}">Yes, build the full site</button> <button class="sm" data-fullno="1">Cancel</button>` : `<button class="sm" data-full="${c.id}" title="Keep this site and build every page">Build full site</button>`);
 	if (c.previewUrl && c.daysLeft != null) out.push(`<button class="sm" data-ext="${c.id}" ${c.daysLeft >= 30 ? 'disabled title="Already at the 30-day maximum"' : ''}>+7 days</button>`);
 	if (c.previewUrl && c.runState === 'done') out.push(`<button class="sm" data-lic="${c.id}" title="Apply the Oxygen licence to this site">Oxygen licence</button>`);
+	if (c.runState === 'done' && !c.customer) out.push(`<button class="sm" data-cust="${c.id}" title="Move this church to Customers">Make customer</button>`);
 	if (c.canDelete) out.push(confirmDel === c.id ? `<button class="sm danger" data-del2="${c.id}">Yes, delete the site</button> <button class="sm" data-delno="1">Cancel</button>` : `<button class="sm danger" data-del="${c.id}">Delete</button>`);
 	return out.join(' ');
+}
+function custFormHtml(c) {
+	const dom = answers['cust:domain'] ?? c.domain ?? '', contact = answers['cust:contact'] ?? c.contactEmail ?? '';
+	return `<div class="cu-set cu-inline"><b>Make ${esc(c.name)} a customer</b>
+		<label>Website address <input type="text" data-answer="cust:domain" value="${esc(dom)}"></label>
+		<fieldset><legend>Who will manage their DNS?</legend>
+			<label class="pr-opt"><input type="radio" name="cd" data-custdns="ours" ${custForm.dns === 'ours' ? 'checked' : ''}><span><b>We will</b><small>They move their nameservers to us.</small></span></label>
+			<label class="pr-opt"><input type="radio" name="cd" data-custdns="theirs" ${custForm.dns === 'theirs' ? 'checked' : ''}><span><b>The church will</b><small>We send them the records to add.</small></span></label></fieldset>
+		<label class="cu-chk"><input type="checkbox" data-custemail="1" ${custForm.email ? 'checked' : ''}> Email is hosted with us</label>
+		<label>Contact email <input type="text" data-answer="cust:contact" value="${esc(contact)}" placeholder="office@church.ca"></label>
+		<div class="btns"><button class="primary sm2" data-cust2="${c.id}" ${custForm.dns ? '' : 'disabled title="Choose who manages the DNS first"'}>Make customer</button> <button class="sm" data-cust="${c.id}">Cancel</button></div><p class="err" id="custErr"></p></div>`;
 }
 function detail(c) {
 	const cur = curOf(c);
@@ -66,7 +78,7 @@ function detail(c) {
 	const blocked = cur.state === 'blocked' ? `<div class="hint">Until then you can do the last step by hand: <a href="/api/prospects/${c.id}/package">download the ZIP</a>, open <a href="${esc(c.previewUrl)}/wp-admin" target="_blank" rel="noopener">the site</a>, then Site Assistant → Import.</div>` : '';
 	const adm = adminShown[c.id] ? `<div class="hint">Admin login: <code>${esc(adminShown[c.id].login)}</code> / <code>${esc(adminShown[c.id].password)}</code></div>` : '';
 	const docs = c.docs.length ? `<ul class="pr-docs">${c.docs.map((d) => `<li class="${d.readable ? '' : 'bad'}">${esc(d.name)} <small>${esc(d.note || '')}</small></li>`).join('')}</ul>` : '';
-	return `<ol class="stages">${c.stages.map(stageHtml).join('')}</ol>
+	return `${custOpen === c.id ? custFormHtml(c) : ''}<ol class="stages">${c.stages.map(stageHtml).join('')}</ol>
 		<div class="status ${cur.state}"><span>${esc(c.headline)}</span></div>${bar}${q}${blocked}
 		<div class="pr-det">
 			<div class="hint">Staff login on the preview: <code>churchweb</code> with the standard staff password. ${me?.user?.role === 'admin' && c.previewUrl ? `<a href="#" data-adm="${c.id}">Show admin login</a>` : ''}</div>${adm}
@@ -95,7 +107,7 @@ function summary(list) {
 }
 function render() {
 	if (typing) return;
-	const mine = rows.filter((r) => !r.legacy);
+	const mine = rows.filter((r) => !r.legacy && !r.customer);
 	const f = $('fFind')?.value.trim().toLowerCase() || '', shown = f ? mine.filter((c) => `${c.name} ${c.domain} ${c.contactEmail}`.toLowerCase().includes(f)) : mine;
 	$('sum').innerHTML = mine.length ? summary(mine) : '';
 	$('dash').hidden = !mine.length;
@@ -113,12 +125,16 @@ document.addEventListener('focusin', (e) => { if (e.target.matches('[data-answer
 document.addEventListener('focusout', (e) => { if (e.target.matches('[data-answer]')) { typing = false; } });
 document.addEventListener('input', (e) => { if (e.target.matches('[data-answer]')) answers[e.target.dataset.answer] = e.target.value; });
 document.addEventListener('click', async (e) => {
-	const t = e.target.closest('[data-more],[data-run],[data-restart],[data-restart2],[data-restartno],[data-ext],[data-lic],[data-login],[data-full],[data-full2],[data-fullno],[data-del],[data-del2],[data-delno],[data-adm],[data-ans],[data-send]'); if (!t) return;
+	const t = e.target.closest('[data-more],[data-run],[data-restart],[data-restart2],[data-restartno],[data-ext],[data-cust],[data-cust2],[data-custdns],[data-custemail],[data-lic],[data-login],[data-full],[data-full2],[data-fullno],[data-del],[data-del2],[data-delno],[data-adm],[data-ans],[data-send]'); if (!t) return;
 	e.preventDefault();
 	const d = t.dataset;
 	if (d.more) { openCards.has(d.more) ? openCards.delete(d.more) : openCards.add(d.more); return render(); }
 	if (d.run) return act(() => api(`/api/prospects/${d.run}/run`, { method: 'POST', body: '{}' }));
 	if (d.lic) return act(async () => { t.disabled = true; const r = await api(`/api/prospects/${d.lic}/license`, { method: 'POST', body: '{}' }); alert(r.state === 'ok' ? 'Oxygen is licensed on this site.' : (r.detail || 'The licence could not be applied.')); });
+	if (d.cust) { custOpen = custOpen === d.cust ? null : d.cust; custForm = { dns: '', email: false }; delete answers['cust:domain']; delete answers['cust:contact']; typing = false; return render(); }
+	if (d.custdns) { custForm.dns = d.custdns; return render(); }
+	if (d.custemail) { custForm.email = t.checked; return; }
+	if (d.cust2) { try { await api(`/api/customers/${d.cust2}/convert`, { method: 'POST', body: JSON.stringify({ domain: answers['cust:domain'] ?? rows.find((r) => r.id === d.cust2)?.domain, dns: custForm.dns, email: custForm.email, contactEmail: answers['cust:contact'] ?? rows.find((r) => r.id === d.cust2)?.contactEmail }) }); location.href = '/customers'; } catch (err) { $('custErr').textContent = err.message; } return; }
 	if (d.ext) return act(() => api(`/api/prospects/${d.ext}/extend`, { method: 'POST', body: JSON.stringify({ days: 7 }) }));
 	if (d.login) {
 		const w = window.open('about:blank', '_blank'); // opened first so the browser doesn't block it
