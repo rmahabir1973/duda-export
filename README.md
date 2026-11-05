@@ -274,3 +274,4 @@ Portal callback endpoints (no sign-in, signed token per church): `/api/build/:id
 - Preview sites never touch DNS: *.churchwebglobal.com resolves through the wildcard, so the Create site step skips the DNS check and Cloudflare is not called. DNS is for go-live only.
 - The Hostinger plugins are now removed as the last step, after the build (it never holds up the run; if it fails it's noted under the church's details).
 - The sign-in gate for /api no longer covers /api/build/*: the sites' plugin calls those with a signed per-church token (it was being refused with 401 "Not signed in", so the build could neither download its package nor report back).
+- **Stop & restart** (build stage): stops this church's build on the site and starts it again from the beginning. Shown while a build is running, waiting for you, or blocked.
