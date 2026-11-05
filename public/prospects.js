@@ -10,7 +10,7 @@ const api = async (path, opts = {}) => {
 };
 const ICON = { done: '✔', working: '●', failed: '!', needs_input: '?', blocked: '⏸', waiting: '○' };
 const WORDS = { done: 'Done', working: 'Working', failed: 'Stopped', needs_input: 'Needs you', blocked: 'Waiting', waiting: '' };
-let seen = false, rows = [], me = null, openCards = new Set(), confirmDel = null, confirmFull = null, answers = {}, adminShown = {}, timer = null, typing = false;
+let seen = false, rows = [], me = null, openCards = new Set(), confirmDel = null, confirmFull = null, confirmRestart = null, answers = {}, adminShown = {}, timer = null, typing = false;
 
 const stageHtml = (s) => `<li class="st ${s.state}" title="${esc(s.message || '')}"><span class="ic">${ICON[s.state] || '○'}</span><span class="tt">${esc(s.title)}</span>${WORDS[s.state] ? `<small>${WORDS[s.state]}</small>` : ''}</li>`;
 const fmtDate = (t) => t ? new Date(t).toLocaleDateString('en-CA', { year: 'numeric', month: 'short', day: 'numeric' }) : '';
@@ -33,6 +33,7 @@ function actions(c) {
 	if (c.canRetry) out.push(`<button class="primary sm2" data-run="${c.id}">Try again</button>`);
 	if (c.canStart && !c.canRetry && c.runState === 'idle') out.push(`<button class="primary sm2" data-run="${c.id}">Start</button>`);
 	if (c.previewUrl && c.runState === 'done') out.push(`<a class="btn sm" href="${esc(c.previewUrl)}" target="_blank" rel="noopener">Preview</a>`);
+	if (c.canRestart) out.push(confirmRestart === c.id ? `<button class="sm primary" data-restart2="${c.id}">Yes, stop and restart</button> <button class="sm" data-restartno="1">Cancel</button>` : `<button class="sm" data-restart="${c.id}" title="Stop the build and start it again">Stop &amp; restart</button>`);
 	if (c.canLogin) out.push(`<button class="sm" data-login="${c.id}" title="Sign in to this site's WordPress admin">WP-Admin</button>`);
 	if (c.canFull) out.push(confirmFull === c.id ? `<button class="sm primary" data-full2="${c.id}">Yes, build the full site</button> <button class="sm" data-fullno="1">Cancel</button>` : `<button class="sm" data-full="${c.id}" title="Keep this site and build every page">Build full site</button>`);
 	if (c.previewUrl && c.daysLeft != null) out.push(`<button class="sm" data-ext="${c.id}" ${c.daysLeft >= 30 ? 'disabled title="Already at the 30-day maximum"' : ''}>+7 days</button>`);
@@ -92,7 +93,7 @@ document.addEventListener('focusin', (e) => { if (e.target.matches('[data-answer
 document.addEventListener('focusout', (e) => { if (e.target.matches('[data-answer]')) { typing = false; } });
 document.addEventListener('input', (e) => { if (e.target.matches('[data-answer]')) answers[e.target.dataset.answer] = e.target.value; });
 document.addEventListener('click', async (e) => {
-	const t = e.target.closest('[data-more],[data-run],[data-ext],[data-login],[data-full],[data-full2],[data-fullno],[data-del],[data-del2],[data-delno],[data-adm],[data-ans],[data-send]'); if (!t) return;
+	const t = e.target.closest('[data-more],[data-run],[data-restart],[data-restart2],[data-restartno],[data-ext],[data-login],[data-full],[data-full2],[data-fullno],[data-del],[data-del2],[data-delno],[data-adm],[data-ans],[data-send]'); if (!t) return;
 	e.preventDefault();
 	const d = t.dataset;
 	if (d.more) { openCards.has(d.more) ? openCards.delete(d.more) : openCards.add(d.more); return render(); }
@@ -104,6 +105,9 @@ document.addEventListener('click', async (e) => {
 		catch (x) { if (w) w.close(); alert(x.message); }
 		return;
 	}
+	if (d.restart) { confirmRestart = d.restart; return render(); }
+	if (d.restartno) { confirmRestart = null; return render(); }
+	if (d.restart2) { confirmRestart = null; return act(() => api(`/api/prospects/${d.restart2}/restart`, { method: 'POST', body: '{}' })); }
 	if (d.full) { confirmFull = d.full; return render(); }
 	if (d.fullno) { confirmFull = null; return render(); }
 	if (d.full2) { confirmFull = null; openCards.add(d.full2); return act(() => api(`/api/prospects/${d.full2}/full`, { method: 'POST', body: '{}' })); }

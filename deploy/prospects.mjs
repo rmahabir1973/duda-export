@@ -341,6 +341,7 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 			canFull: p.mode !== 'full' && s.build.state === 'done' && run.state === 'done',
 			canLogin: s.site.state === 'done',
 			canDelete: !ch.stages?.golive?.done,
+			canRestart: s.site.state === 'done' && ['working', 'needs_input', 'blocked'].includes(s.build.state),
 			tidy: run.cleanup ? { state: run.cleanup.state, message: run.cleanup.message } : null,
 		};
 	}
@@ -408,6 +409,18 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 		return store.get(id);
 	}
 
+	/** Stop a build that is running (or looks stuck) on the site and start it again from the beginning. Only this church's own build process is stopped. */
+	async function restartBuild(id) {
+		const ch = store.get(id); if (!ch?.prospect) throw new Error('Not a prospect.');
+		if (ch.run?.steps.site.state !== 'done') throw new Error('The site has not been created yet.');
+		if (!['working', 'needs_input', 'blocked', 'failed'].includes(ch.run.steps.build.state)) throw new Error('There is no build to restart.');
+		const ssh = clients.ssh;
+		if (ssh?.available?.()) { try { await ssh.exec(`pkill -f ${shq(`[a]pi/build/${id}/status`)}; rm -f $HOME/cwai-portal-${ch.slug}.log; echo stopped`, { timeout: 20000 }); } catch { /* it may already have ended */ } }
+		patch(id, (r) => { r.state = 'running'; r.answers = {}; r.buildStartedAt = null; r.buildHeardAt = null; r.attempts = {}; r.lastFix = {}; r.steps.build = { state: 'waiting', message: '', pct: null }; });
+		note(id, 'Build restarted by a person');
+		return store.get(id);
+	}
+
 	/** One-click sign-in to the church's WordPress admin: ask the site for a single-use link. */
 	async function adminLink(id) {
 		const ch = store.get(id); if (!ch?.prospect) throw new Error('Not a prospect.');
@@ -436,6 +449,7 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 		r.post('/:id/keep', wrap(async (req, res) => { if (!pick(req, res)) return; res.json(view(keep(req.params.id))); }));
 		r.post('/:id/extend', wrap(async (req, res) => { if (!pick(req, res)) return; res.json(view(extend(req.params.id, req.body?.days))); }));
 		r.post('/:id/full', wrap(async (req, res) => { if (!pick(req, res)) return; switchToFull(req.params.id); tick(req.params.id); res.json(view(store.get(req.params.id))); }));
+		r.post('/:id/restart', wrap(async (req, res) => { if (!pick(req, res)) return; await restartBuild(req.params.id); tick(req.params.id); res.json(view(store.get(req.params.id))); }));
 		r.post('/:id/login', wrap(async (req, res) => { if (!pick(req, res)) return; res.json(await adminLink(req.params.id)); }));
 		r.delete('/:id', wrap(async (req, res) => { if (!pick(req, res)) return; await remove(req.params.id); res.json({ deleted: true }); }));
 		r.post('/:id/docs', express.raw({ type: () => true, limit: MAX_DOC + 1024 }), wrap(async (req, res) => { if (!pick(req, res)) return; res.json(view(await addDoc(req.params.id, decodeURIComponent(req.get('x-filename') || ''), req.body))); }));
@@ -472,5 +486,5 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 	};
 	const stopTimers = () => { for (const t of timers) { clearInterval(t); clearTimeout(t); } timers = []; };
 
-	return { create, detect, start, tick, tickAll, reportBuild, answer, cleanup, addDoc, removeDoc, keep, extend, remove, switchToFull, adminLink, sweep, view, router, buildRouter, sign, verify, startTimers, stopTimers, briefFor };
+	return { create, detect, start, tick, tickAll, reportBuild, answer, cleanup, restartBuild, addDoc, removeDoc, keep, extend, remove, switchToFull, adminLink, sweep, view, router, buildRouter, sign, verify, startTimers, stopTimers, briefFor };
 }

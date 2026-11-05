@@ -275,3 +275,15 @@ test('Hostinger plugins are removed last, after the build, and never hold the ru
 	assert.equal(r.calls.cleanup, 1); assert.equal(r.store.get(c.id).run.cleanup.state, 'done'); assert.equal(r.store.get(c.id).run.state, 'done');
 	await r.p.tickAll(); assert.equal(r.calls.cleanup, 1, 'only once');
 });
+
+test('stop & restart: a build that is running or stuck is stopped on the site and started again from scratch', async () => {
+	const { r, c } = await (async () => { const r = rig({ cwai: true }); const c = await make(r); r.p.start(c.id); r.job.status = 'done'; for (let i = 0; i < 4; i++) await r.p.tick(c.id); return { r, c }; })();
+	assert.equal(r.store.get(c.id).run.steps.build.state, 'working'); assert.equal(r.p.view(r.store.get(c.id)).canRestart, true);
+	const before = r.bg.length;
+	await r.p.restartBuild(c.id);
+	assert.equal(r.store.get(c.id).run.steps.build.state, 'waiting'); assert.equal(r.store.get(c.id).run.state, 'running');
+	await r.p.tick(c.id); assert.equal(r.bg.length, before + 1); assert.match(r.bg.at(-1), /--package=/); assert.equal(r.store.get(c.id).run.steps.build.state, 'working');
+	r.p.reportBuild(c.id, { state: 'done', message: 'ok' });
+	assert.equal(r.p.view(r.store.get(c.id)).canRestart, false);
+	await assert.rejects(() => r.p.restartBuild(c.id), /no build to restart/);
+});
