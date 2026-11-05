@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { createStore } from './deploy/store.mjs';
 import { configFromEnv, makeClients } from './deploy/clients.mjs';
 import { createDeployRouter } from './deploy/routes.mjs';
+import { createProspects } from './deploy/prospects.mjs';
 import { createEmailRouter } from './deploy/emailroutes.mjs';
 import { connectDb, migrate } from './portal/db.mjs';
 import { createPortal } from './portal/routes.mjs';
@@ -264,7 +265,7 @@ if (outreach) console.log(`outreach: Loops ${loops.available() ? 'connected' : '
 const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
-if (env.CF_ACCESS_TEAM_DOMAIN && env.CF_ACCESS_AUD) { app.use(createAccessGuard({ teamDomain: env.CF_ACCESS_TEAM_DOMAIN.replace(/^https?:\/\//, '').replace(/\/$/, ''), aud: env.CF_ACCESS_AUD, exempt: ['/healthz', '/webhooks/loops'] })); console.log('portal: only requests that passed Cloudflare Access are accepted'); }
+if (env.CF_ACCESS_TEAM_DOMAIN && env.CF_ACCESS_AUD) { app.use(createAccessGuard({ teamDomain: env.CF_ACCESS_TEAM_DOMAIN.replace(/^https?:\/\//, '').replace(/\/$/, ''), aud: env.CF_ACCESS_AUD, exempt: ['/healthz', '/webhooks/loops', '/api/build/'] })); console.log('portal: only requests that passed Cloudflare Access are accepted'); }
 app.use((req, res, next) => {
 	if (req.secure) res.set('Strict-Transport-Security', 'max-age=63072000; includeSubDomains');
 	res.set({
@@ -320,7 +321,7 @@ const need = portal ? portal.need : legacyNeed;
 const signedIn = (req) => (portal ? !!req.user : auth(req) === 'session');
 const page = (file, { dbOnly = false } = {}) => (req, res) => res.type('html').send(html(!signedIn(req) ? 'login.html' : dbOnly && !portal ? 'needsdb.html' : file));
 
-app.get('/', (req, res) => (signedIn(req) ? res.redirect('/deploy') : res.type('html').send(html('login.html'))));
+app.get('/', (req, res) => (signedIn(req) ? res.redirect('/prospects') : res.type('html').send(html('login.html'))));
 app.get('/exporter', page('app.html'));
 if (portal) portal.mount(app);
 else app.get('/api/auth-mode', (req, res) => res.json({ mode: 'password', firstRun: false }));
@@ -349,6 +350,23 @@ const boardInit = await deployStore.init();
 console.log(`customer board: ${boardInit.count} customers loaded (${boardInit.source})`);
 app.use('/api/deploy', createDeployRouter({ need, store: deployStore, clients: deployClients }));
 app.use('/api/email', createEmailRouter({ need, clients: deployClients }));
+// Prospects: the one-flow screen. The export comes from the exporter above; the site steps are the same ones as the old Customers checklist.
+const lines = (v) => String(v || '').split(/[\s,;]+/).map((x) => x.trim()).filter((x) => /@/.test(x));
+const prospects = createProspects({
+	store: deployStore, clients: deployClients, dataDir: DATA_DIR,
+	exporter: {
+		enqueue: (b, by) => enqueue(b, by),
+		get: (id) => { const j = jobs.get(id); if (!j) return null; const t = j.log.find((l) => /site type:/i.test(l)); return { status: j.status, error: j.error, summary: j.summary, lastLog: j.log[j.log.length - 1] || '', zipPath: j.zip ? path.join(jobDir(j.id), j.zip) : null, platform: t ? (/site type:\s*([^(,]+)/i.exec(t)?.[1] || '').trim() : '' }; },
+	},
+	notify: deployClients.cfg.postmarkServerToken ? ({ to, subject, text }) => deployClients.postmark.sendEmail({ From: (env.SUPPORT_FROM || 'support@churchwebglobal.com').trim(), To: to.join(','), Subject: subject, TextBody: text, MessageStream: 'outbound' }) : null,
+	alertTo: lines(env.PROSPECT_ALERT_TO || env.SUPPORT_ESCALATE_TO),
+	baseUrl: (env.PORTAL_URL || 'https://portal.churchwebglobal.com').replace(/\/$/, ''),
+	secret: [env.BUILD_LINK_SECRET, env.SESSION_SECRET, env.API_TOKEN, env.GATEWAY_ADMIN_KEY].filter(Boolean).join('|'),
+	autoDelete: /^(on|true|1|yes)$/i.test(String(env.PROSPECT_AUTODELETE || '')),
+});
+app.use('/api/prospects', prospects.router({ need }));
+app.use('/api/build', prospects.buildRouter());
+if (String(env.PROSPECTS_RUN || 'on').toLowerCase() !== 'off') prospects.startTimers();
 const hosted = portal && portalDb ? createHosted({ db: portalDb, clients: deployClients, duda: makeDudaMcp({ token: (env.DUDA_MCP_TOKEN || '').trim() }), dir: portal.dir, ownDomains: (env.OWN_DOMAINS || 'churchwebglobal.com,churchwebsupport.com').split(',').map((x) => x.trim()).filter(Boolean), previewDomain: deployClients.cfg.previewDomain }) : null;
 if (hosted) {
 	app.use('/api/hosted', hostedRouter({ need, hosted, store: deployStore }));
@@ -386,6 +404,7 @@ if (portal && portalDb && assistant) {
 if (outreach) app.use('/api/outreach', outreachRouter({ need, outreach, loops, webhookSecret: LOOPS_WEBHOOK_SECRET }));
 app.get('/email', page('email.html'));
 app.get('/deploy', page('deploy.html'));
+app.get('/prospects', page('prospects.html'));
 app.get('/directory', page('directory.html', { dbOnly: true }));
 app.get('/activity', page('activity.html', { dbOnly: true }));
 app.get('/domains', page('domains.html', { dbOnly: true }));

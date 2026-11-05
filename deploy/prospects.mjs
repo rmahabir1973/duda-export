@@ -1,0 +1,400 @@
+// Prospects: one simple flow per church (add, export, create site, build, ready) that runs on its own.
+// It chains the existing exporter and the existing preview-site checks/fixes, so there is no second copy of that logic.
+// Each church record gets `prospect` (what staff entered) and `run` (what the runner is doing and how far it got).
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import express from 'express';
+import * as realChecks from './checks.mjs';
+import { configured, shq } from './clients.mjs';
+import { slugify, normDomain, SLUG_RE, DOMAIN_RE } from './store.mjs';
+import { buildBrief } from './brief.mjs';
+
+const DAY = 86400000;
+export const PREVIEW_DAYS = 30;
+const FIX_WAIT_MS = 180000; // after a fix that was accepted, give Hostinger this long before trying again
+const MAX_ATTEMPTS = 3;
+const BUILD_SILENCE_MS = 25 * 60000; // the build stopped reporting
+const DOC_EXT = /\.(txt|md|csv|html?|rtf|pdf|docx?|odt|xlsx?)$/i;
+const TEXT_EXT = /\.(txt|md|csv|html?)$/i;
+const MAX_DOC = 10 * 1048576;
+
+/** What the screen says while each preview-site step is being done. */
+const DOING = {
+	site: 'Creating the site on Hostinger', folder: 'Installing WordPress', dns: 'Setting up the preview address', plugins: 'Copying our plugins',
+	plugin: 'Switching on the AI Assistant', hostingerPlugins: 'Removing the Hostinger extras', staffview: 'Turning on the simple staff view',
+	teamLogin: 'Creating the team login', connected: 'Connecting the AI Assistant', address: 'Setting the site address', title: 'Setting the church name', preview: 'Hiding the site from Google', oxygen: 'Adding the Oxygen licence',
+};
+const doing = (q) => DOING[q.id] || q.label;
+const blankStep = () => ({ state: 'waiting', message: '', pct: null });
+export const blankRun = () => ({ state: 'idle', steps: { export: blankStep(), site: blankStep(), build: blankStep() }, attempts: {}, lastFix: {}, answers: {}, started: null, updated: null });
+
+const clip = (s, n = 300) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, n);
+/** Plain words for a failure: keep it short and never show a stack trace or a secret-looking string. */
+export const plain = (m) => clip(String(m || 'Something went wrong.').replace(/\b[A-Za-z0-9_-]{32,}\b/g, '••••'), 240);
+
+/** Pull a church name out of a page title: drop "Home", "Welcome", and the tagline after a separator. */
+export function nameFromTitle(title, domain) {
+	const t = String(title || '').replace(/&amp;/g, '&').replace(/&#0*39;|&apos;/g, "'").replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+	const parts = t.split(/\s*(?:\||–|—|·|•|:| - )\s*/).map((x) => x.trim()).filter((x) => x && !/^(home|welcome|homepage|home page|main)$/i.test(x));
+	const church = parts.find((x) => /church|chapel|parish|cathedral|synagogue|congregation|ministr|united|baptist|anglican|lutheran|presbyterian|catholic/i.test(x));
+	const pick = church || parts[0];
+	if (pick && pick.length >= 3 && pick.length <= 80) return pick;
+	const label = String(domain || '').split('.')[0].replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+	return label || 'New church';
+}
+export function platformFromHtml(html) {
+	const h = String(html || '').slice(0, 400000);
+	if (/static\.cdn-website\.com|dmAlbum|_dm_|dudaone|multiscreensite\.com/i.test(h)) return 'DUDA';
+	if (/wp-content\/|wp-includes\//i.test(h)) return 'WordPress';
+	if (/wixstatic\.com|wix\.com/i.test(h)) return 'Wix';
+	if (/squarespace/i.test(h)) return 'Squarespace';
+	if (/weebly/i.test(h)) return 'Weebly';
+	return '';
+}
+const titleOf = (html) => { const m = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(String(html || '').slice(0, 200000)); return m ? m[1] : ''; };
+
+export function createProspects({ store, clients, exporter, dataDir, notify = null, secret = '', now = Date.now, autoDelete = false, alertTo = [], baseUrl = '', engine = realChecks, log = console.error } = {}) {
+	const dir = (id) => path.join(dataDir, 'prospects', id);
+	const key = crypto.createHash('sha256').update('prospects|' + (secret || crypto.randomBytes(32).toString('hex'))).digest();
+	const busy = new Set();
+	const sign = (id, ttlMs = 8 * 3600000) => { const exp = now() + ttlMs, body = `${id}.${exp}`; return Buffer.from(body).toString('base64url') + '.' + crypto.createHmac('sha256', key).update(body).digest('base64url'); };
+	const verify = (token) => {
+		try {
+			const [b, mac] = String(token || '').split('.'), body = Buffer.from(b, 'base64url').toString(), want = crypto.createHmac('sha256', key).update(body).digest('base64url');
+			if (!mac || mac.length !== want.length || !crypto.timingSafeEqual(Buffer.from(mac), Buffer.from(want))) return null;
+			const i = body.lastIndexOf('.'), id = body.slice(0, i), exp = Number(body.slice(i + 1));
+			return exp > now() ? id : null;
+		} catch { return null; }
+	};
+	const adminPw = (ch) => crypto.createHmac('sha256', key).update('wp-admin|' + ch.slug).digest('base64url').slice(0, 20) + 'aA1!';
+	const ctxFor = () => ({ c: clients, configured: configured(clients.cfg), memo: {}, facts: null, secret: null, adminPassword: adminPw });
+	const mailTo = (ch) => [...new Set([/@/.test(ch.createdBy || '') ? ch.createdBy : '', ...(alertTo || [])].filter(Boolean))];
+	const tell = async (ch, subject, text, alert = false) => { if (!notify) return; try { await notify({ to: alert ? [...new Set(alertTo || [])] : mailTo(ch), subject, text }); } catch (e) { log('prospects: could not send a notice:', e.message); } };
+
+	/* ------------------------------------------------------------ run helpers */
+	const patch = (id, fn) => store.update(id, (c) => { c.run ||= blankRun(); fn(c.run, c); c.run.updated = now(); });
+	const setStep = (id, k, p, runPatch) => patch(id, (r) => { r.steps[k] = { ...r.steps[k], ...p }; if (runPatch) Object.assign(r, runPatch); });
+	const note = (id, text, level = 'info') => store.log(id, 'prospects', text, level);
+
+	/* ------------------------------------------------------------ step 2: export */
+	async function stepExport(ch) {
+		const p = ch.prospect, run = ch.run;
+		if (run.steps.export.state === 'done') return false;
+		if (!run.exportJobId) {
+			try {
+				const j = await exporter.enqueue({ domain: p.domain, label: ch.name, preview: p.mode !== 'full', mode: 'auto' }, 'prospects');
+				patch(ch.id, (r) => { r.exportJobId = j.id; r.steps.export = { state: 'working', message: 'Waiting to start the export…', pct: null }; });
+				note(ch.id, 'Export started');
+			} catch (e) { setStep(ch.id, 'export', { state: 'failed', message: plain(e.message) }, { state: 'failed' }); await tell(ch, `Export could not start: ${ch.name}`, plain(e.message), true); }
+			return true;
+		}
+		const j = exporter.get(run.exportJobId);
+		if (!j) { patch(ch.id, (r) => { r.exportJobId = null; r.steps.export = { state: 'failed', message: 'The export was lost (the portal restarted). Press Try again.', pct: null }; r.state = 'failed'; }); return true; }
+		if (j.status === 'queued') { setStep(ch.id, 'export', { state: 'working', message: 'Waiting in line for the export…' }); return true; }
+		if (j.status === 'running') { setStep(ch.id, 'export', { state: 'working', message: clip(j.lastLog || 'Reading the church website…', 140) }); return true; }
+		if (j.status === 'done' && j.zipPath) {
+			fs.mkdirSync(dir(ch.id), { recursive: true });
+			fs.copyFileSync(j.zipPath, path.join(dir(ch.id), 'export.zip'));
+			const s = j.summary || {}, platform = ch.prospect.platform || j.platform || '';
+			store.update(ch.id, (c) => { c.prospect.platform = platform; c.prospect.exported = { pages: s.pages ?? null, images: s.images ?? null, zipMB: s.zipMB ?? null, at: now() }; });
+			setStep(ch.id, 'export', { state: 'done', message: s.pages != null ? `Exported ${s.pages} page${s.pages === 1 ? '' : 's'} and ${s.images ?? 0} images.` : 'Export finished.', pct: 100 });
+			note(ch.id, 'Export finished');
+			return true;
+		}
+		const why = plain(j.error || 'The export did not finish.');
+		patch(ch.id, (r) => { r.steps.export = { state: 'failed', message: why, pct: null }; r.state = 'failed'; });
+		await tell(ch, `Export failed: ${ch.name}`, `${ch.prospect.domain}: ${why}`, true);
+		return true;
+	}
+
+	/* ------------------------------------------------------------ step 3: create the site */
+	async function stepSite(ch) {
+		const run = ch.run;
+		if (run.steps.site.state === 'done') return false;
+		const stage = engine.STAGES.find((s) => s.key === 'preview');
+		for (let guard = 0; guard < 24; guard++) {
+			const cur = store.get(ch.id), ctx = ctxFor();
+			const results = await engine.testStage(ctx, cur, stage);
+			const reqs = engine.reqsFor(stage, cur).filter((q) => !q.manual);
+			const total = reqs.length + 1, done = reqs.filter((q) => engine.isSatisfied(results[q.id]?.state)).length;
+			const saveResults = (extra = {}) => store.update(ch.id, (c) => { const st = (c.stages.preview ||= {}); st.results = { ...results, ...extra }; st.at = now(); st.done = engine.reqsFor(stage, c).every((q) => engine.isSatisfied(st.results[q.id]?.state)); });
+			const next = reqs.find((q) => !engine.isSatisfied(results[q.id]?.state) && results[q.id]?.state !== 'blocked');
+			if (!next) {
+				// everything else is in place: the Oxygen licence, then we are done
+				const lic = await engine.applyOxygenLicense(ctx, cur);
+				if (lic.state !== 'ok') { saveResults(); setStep(ch.id, 'site', { state: 'failed', message: plain(lic.detail), pct: Math.round(100 * done / total) }, { state: 'failed' }); await tell(cur, `Site setup stopped: ${cur.name}`, plain(lic.detail), true); return true; }
+				store.update(ch.id, (c) => { const st = (c.stages.preview ||= {}); (st.manual ||= {}).oxygen = true; st.results = { ...results, oxygen: { state: 'ok', detail: lic.detail } }; st.at = now(); st.done = engine.reqsFor(stage, c).every((q) => engine.isSatisfied(st.results[q.id]?.state)); c.prospect.siteReadyAt = now(); c.prospect.expiresAt = now() + PREVIEW_DAYS * DAY; });
+				setStep(ch.id, 'site', { state: 'done', message: `The preview site is ready at ${previewHost(cur)}.`, pct: 100 });
+				note(ch.id, 'Preview site created');
+				return true;
+			}
+			saveResults();
+			const r = results[next.id] || {};
+			const pct = Math.round(100 * done / total);
+			if (r.state === 'unknown') { setStep(ch.id, 'site', { state: 'failed', message: plain(r.detail || `Can't check: ${next.label}`), pct }, { state: 'failed' }); await tell(cur, `Site setup stopped: ${cur.name}`, plain(r.detail), true); return true; }
+			if (!next.fix) { setStep(ch.id, 'site', { state: 'failed', message: plain(`This step needs a person: ${next.label}`), pct }, { state: 'failed' }); return true; }
+			const last = cur.run.lastFix?.[next.id];
+			if (last && last.ok && now() - last.at < FIX_WAIT_MS) { setStep(ch.id, 'site', { state: 'working', message: `${doing(next)}… (this can take a minute or two)`, pct }); return true; }
+			const tries = cur.run.attempts?.[next.id] || 0;
+			if (tries >= MAX_ATTEMPTS) { const m = `${doing(next)} did not work after ${MAX_ATTEMPTS} tries. ${plain(last?.detail || r.detail)}`; setStep(ch.id, 'site', { state: 'failed', message: m, pct }, { state: 'failed' }); await tell(cur, `Site setup stopped: ${cur.name}`, m, true); return true; }
+			setStep(ch.id, 'site', { state: 'working', message: `${doing(next)}…`, pct });
+			let out;
+			try { out = await engine.fixReq(ctx, cur, stage, next, r); } catch (e) { out = { ok: false, detail: e.message }; }
+			patch(ch.id, (rr) => { rr.attempts[next.id] = (rr.attempts[next.id] || 0) + 1; rr.lastFix[next.id] = { at: now(), ok: !!out.ok, detail: clip(out.detail, 200) }; });
+			note(ch.id, `${doing(next)}: ${out.ok ? 'done' : 'could not do it'}${out.detail && !out.ok ? ' (' + clip(out.detail, 120) + ')' : ''}`, out.ok ? 'info' : 'warn');
+			if (out.ok && !['site', 'folder', 'dns'].includes(next.id)) continue; // quick steps: carry straight on
+			return true;
+		}
+		return true;
+	}
+
+	/* ------------------------------------------------------------ step 4: build */
+
+	/** Start (or, after a question, resume) the plugin's build on the church's site. It runs on the server on its own and reports back through the signed callback. */
+	async function triggerBuild(ch, ctx, { resume = false, answer = '' } = {}) {
+		const tok = sign(ch.id), q = (p) => `${baseUrl}/api/build/${ch.id}/${p}?t=${encodeURIComponent(tok)}`;
+		const parts = ['cwai portal-build', `--callback=${shq(`${baseUrl}/api/build/${ch.id}/status`)}`, `--token=${shq(tok)}`, `--mode=${ch.prospect.mode === 'full' ? 'full' : 'preview'}`];
+		if (resume) parts.push('--resume', `--answer=${shq(answer)}`); else parts.push(`--package=${shq(q('package.zip'))}`, `--brief=${shq(q('brief.md'))}`);
+		return engine.runWpBackground(ctx, ch, parts.join(' '), ch.slug);
+	}
+	const previewHost = (ch) => `${ch.slug}.${clients.cfg.previewDomain}`;
+	const briefFor = (ch) => buildBrief({ name: ch.name, domain: ch.prospect.domain, platform: ch.prospect.platform, mode: ch.prospect.mode, notes: ch.prospect.notes, docs: ch.prospect.docs });
+	async function stepBuild(ch) {
+		const run = ch.run, b = run.steps.build;
+		if (b.state === 'done' || b.state === 'needs_input') return false;
+		if (b.state === 'working' && run.buildStartedAt) {
+			if (now() - (run.buildHeardAt || run.buildStartedAt) > BUILD_SILENCE_MS) { setStep(ch.id, 'build', { state: 'failed', message: 'The build stopped reporting back. Press Try again.' }, { state: 'failed' }); await tell(ch, `Build stalled: ${ch.name}`, 'The build stopped reporting back.', true); }
+			return false; // progress arrives from the plugin
+		}
+		fs.mkdirSync(dir(ch.id), { recursive: true });
+		fs.writeFileSync(path.join(dir(ch.id), 'brief.md'), briefFor(ch));
+		const ctx = ctxFor();
+		const has = await engine.runWp(ctx, ch, 'help cwai portal-build');
+		if (has.unavailable) { setStep(ch.id, 'build', { state: 'failed', message: 'Hostinger SSH isn\'t set up on this server, so the build can\'t be started.' }, { state: 'failed' }); return true; }
+		if (has.code !== 0) {
+			patch(ch.id, (r) => { r.steps.build = { state: 'blocked', message: 'The site is ready and the content is packaged. The AI Assistant plugin needs its portal-build update before the portal can start the design on its own. Until then, import the ZIP by hand.', pct: null }; r.state = 'waiting'; });
+			note(ch.id, 'Build waiting for the plugin\'s portal-build command', 'warn');
+			return true;
+		}
+		const r = await triggerBuild(ch, ctx, {});
+		if (r.code !== 0) { setStep(ch.id, 'build', { state: 'failed', message: plain('Could not start the build. ' + (r.err || r.out || '')) }, { state: 'failed' }); return true; }
+		patch(ch.id, (rr) => { rr.buildStartedAt = now(); rr.buildHeardAt = now(); rr.steps.build = { state: 'working', message: 'Importing the content and starting the design…', pct: 5 }; });
+		note(ch.id, 'Build started');
+		return true;
+	}
+
+	/* ------------------------------------------------------------ the runner */
+	async function tick(id) {
+		if (busy.has(id)) return;
+		busy.add(id);
+		try {
+			let ch = store.get(id);
+			if (!ch?.run || ch.run.state !== 'running') return;
+			if (await stepExport(ch)) return;
+			ch = store.get(id); if (ch.run.state !== 'running') return;
+			if (await stepSite(ch)) return;
+			ch = store.get(id); if (ch.run.state !== 'running') return;
+			if (await stepBuild(ch)) return;
+			ch = store.get(id);
+			if (ch.run.steps.build.state === 'done' && ch.run.state === 'running') { patch(id, (r) => { r.state = 'done'; }); }
+		} catch (e) {
+			log('prospects tick:', e.message);
+			try { patch(id, (r) => { r.state = 'failed'; const k = ['export', 'site', 'build'].find((s) => r.steps[s].state !== 'done'); if (k) r.steps[k] = { ...r.steps[k], state: 'failed', message: plain(e.message) }; }); } catch { /* record gone */ }
+		} finally { busy.delete(id); }
+	}
+	const tickAll = async () => { for (const c of store.list()) if (c.run?.state === 'running') await tick(c.id); };
+
+	/** Start (or restart after a failure, or resume) a church's run. Finished steps are never redone. */
+	function start(id) {
+		const ch = store.get(id);
+		if (!ch?.prospect) throw new Error('Not a prospect.');
+		patch(id, (r) => {
+			r.state = 'running'; r.started ||= now();
+			for (const k of ['export', 'site', 'build']) if (r.steps[k].state === 'failed' || r.steps[k].state === 'blocked') r.steps[k] = { state: 'waiting', message: '', pct: null };
+			r.attempts = {}; r.lastFix = {};
+			if (r.steps.export.state === 'waiting') { r.exportJobId = null; }
+		});
+		return store.get(id);
+	}
+
+	/** Called by the plugin (through the signed callback): progress, a question, or the result. */
+	function reportBuild(id, body = {}) {
+		const ch = store.get(id); if (!ch?.run) throw new Error('Unknown church.');
+		const state = String(body.state || ''), message = clip(body.message || '', 300), pct = Number.isFinite(Number(body.pct)) ? Math.max(0, Math.min(100, Number(body.pct))) : null;
+		patch(id, (r) => {
+			r.buildHeardAt = now();
+			if (state === 'working') r.steps.build = { state: 'working', message: message || 'Building the site…', pct: pct ?? r.steps.build.pct };
+			else if (state === 'question') {
+				const qid = clip(body.question?.id || crypto.randomBytes(4).toString('hex'), 40);
+				r.steps.build = { state: 'needs_input', message: 'The AI needs an answer to carry on.', pct: r.steps.build.pct, question: { id: qid, text: clip(body.question?.text, 600), options: (body.question?.options || []).map((o) => clip(o, 120)).slice(0, 6), asked: now() } };
+				r.state = 'needs_input';
+			} else if (state === 'done') { r.steps.build = { state: 'done', message: message || 'The site is built.', pct: 100 }; r.state = 'done'; }
+			else if (state === 'failed') { r.steps.build = { state: 'failed', message: plain(message || 'The build failed.'), pct: null }; r.state = 'failed'; }
+		});
+		const after = store.get(id), s = after.run.steps.build;
+		if (s.state === 'needs_input') tell(after, `Your answer is needed: ${after.name}`, `The AI building ${after.name} has a question:\n\n${s.question.text}\n\nAnswer it in the portal: ${baseUrl}/prospects`);
+		if (s.state === 'done') tell(after, `Preview ready: ${after.name}`, `The preview for ${after.name} is ready:\nhttps://${previewHost(after)}\n\nIt will be deleted on ${new Date(after.prospect.expiresAt).toISOString().slice(0, 10)} unless you keep it.`);
+		if (s.state === 'failed') tell(after, `Build failed: ${after.name}`, s.message, true);
+		return after;
+	}
+
+	function answer(id, qid, text) {
+		const ch = store.get(id), q = ch?.run?.steps.build.question;
+		if (!q || ch.run.steps.build.state !== 'needs_input') throw new Error('There is no question waiting.');
+		if (qid && qid !== q.id) throw new Error('That question has already been answered.');
+		const a = clip(text, 1000); if (!a) throw new Error('Type an answer first.');
+		patch(id, (r) => { r.answers[q.id] = { text: a, at: now() }; r.steps.build = { state: 'working', message: 'Thanks. The AI is carrying on…', pct: r.steps.build.pct }; r.state = 'running'; r.buildHeardAt = now(); });
+		note(id, 'Answered the AI\'s question');
+		const after = store.get(id);
+		triggerBuild(after, ctxFor(), { resume: true, answer: a }).then((r) => {
+			if (!r || r.code !== 0) { setStep(id, 'build', { state: 'failed', message: plain('Could not pass your answer to the site. ' + (r?.err || r?.out || '')) }, { state: 'failed' }); }
+		}).catch((e) => setStep(id, 'build', { state: 'failed', message: plain(e.message) }, { state: 'failed' }));
+		return after;
+	}
+
+	/* ------------------------------------------------------------ creating a prospect, documents */
+	async function detect(urlText) {
+		const domain = normDomain(urlText);
+		if (!DOMAIN_RE.test(domain)) throw new Error('That does not look like a website address (for example britanniaunited.ca).');
+		let html = '';
+		try { const r = await clients.http.get(`https://${domain}/`); if (r && r.status < 400) html = r.text || ''; } catch { /* name from the address instead */ }
+		return { domain, name: nameFromTitle(titleOf(html), domain), platform: platformFromHtml(html) };
+	}
+	async function create({ url, name, contactEmail, mode, notes }, by = '') {
+		const d = await detect(url);
+		const nm = String(name || '').trim() || d.name;
+		let slug = slugify(nm).slice(0, 30).replace(/-+$/g, ''), n = 1;
+		const base = slug;
+		while (!SLUG_RE.test(slug) || store.get(slug)) { n++; slug = (base.slice(0, 27) + '-' + n).replace(/-+/g, '-'); if (n > 50) throw new Error('Could not make a short name for this church.'); }
+		const email = String(contactEmail || '').trim();
+		if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error('That email address does not look right.');
+		const c = store.create({ name: nm, slug, domain: d.domain, plan: 'website', kind: 'new', contactEmail: email, notes: '' }, by);
+		store.update(c.id, (x) => { x.prospect = { url: String(url).trim(), domain: d.domain, mode: mode === 'full' ? 'full' : 'preview', platform: d.platform, notes: String(notes || '').slice(0, 2000), docs: [], createdAt: now() }; x.run = blankRun(); });
+		return store.get(c.id);
+	}
+	function addDoc(id, filename, buf) {
+		const ch = store.get(id); if (!ch?.prospect) throw new Error('Not a prospect.');
+		const name = path.basename(String(filename || '')).replace(/[^\w.\- ()]/g, '_').slice(0, 100);
+		if (!DOC_EXT.test(name)) throw new Error('Use a text, Word, PDF, spreadsheet or HTML file.');
+		if (!buf?.length) throw new Error('That file is empty.');
+		if (buf.length > MAX_DOC) throw new Error('That file is over 10 MB.');
+		if ((ch.prospect.docs || []).length >= 8) throw new Error('That is enough files for one church (8).');
+		fs.mkdirSync(path.join(dir(id), 'docs'), { recursive: true });
+		const n = (ch.prospect.docs || []).reduce((m, d) => Math.max(m, d.n), 0) + 1;
+		fs.writeFileSync(path.join(dir(id), 'docs', `${n}-${name}`), buf);
+		const text = TEXT_EXT.test(name) ? buf.toString('utf8').replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 20000) : '';
+		store.update(id, (c) => { c.prospect.docs.push({ n, name, size: buf.length, text }); });
+		return store.get(id);
+	}
+	function removeDoc(id, n) {
+		const ch = store.get(id), d = ch?.prospect?.docs?.find((x) => x.n === Number(n)); if (!d) throw new Error('Not found.');
+		try { fs.rmSync(path.join(dir(id), 'docs', `${d.n}-${d.name}`), { force: true }); } catch { /* ignore */ }
+		store.update(id, (c) => { c.prospect.docs = c.prospect.docs.filter((x) => x.n !== d.n); });
+	}
+
+	/* ------------------------------------------------------------ what the screen shows */
+	const STAGE_DEFS = [['add', 'Add church'], ['export', 'Export'], ['site', 'Create site'], ['build', 'Build site'], ['ready', 'Ready']];
+	function view(ch) {
+		if (!ch.prospect) return { id: ch.id, name: ch.name, domain: ch.domain, legacy: true, created: ch.created };
+		const run = ch.run || blankRun(), s = run.steps, p = ch.prospect;
+		const left = p.expiresAt ? Math.ceil((p.expiresAt - now()) / DAY) : null;
+		const stages = STAGE_DEFS.map(([k, title]) => {
+			if (k === 'add') return { key: k, title, state: 'done', message: p.mode === 'full' ? 'Full site' : 'Preview (5 key pages)' };
+			if (k === 'ready') return { key: k, title, state: s.build.state === 'done' ? 'done' : 'waiting', message: s.build.state === 'done' ? `Live at ${previewHost(ch)}` : '' };
+			return { key: k, title, ...s[k] };
+		});
+		const cur = stages.find((x) => x.state !== 'done');
+		const headline = !cur ? 'Preview ready' : (cur.message || (cur.state === 'waiting' ? 'Waiting to start' : ''));
+		return {
+			id: ch.id, name: ch.name, domain: p.domain, mode: p.mode, platform: p.platform || '', contactEmail: ch.contactEmail || '', createdAt: p.createdAt, createdBy: ch.createdBy || '',
+			runState: run.state, headline, stages, currentStage: cur?.key || 'ready', docs: (p.docs || []).map((d) => ({ n: d.n, name: d.name, size: d.size })),
+			previewUrl: s.site.state === 'done' ? `https://${previewHost(ch)}` : '', expiresAt: p.expiresAt || null, daysLeft: left, kept: !!p.kept, exported: p.exported || null,
+			canStart: ['idle', 'failed', 'waiting'].includes(run.state), canRetry: run.state === 'failed' || s.build.state === 'blocked',
+			zipReady: fs.existsSync(path.join(dir(ch.id), 'export.zip')),
+			question: s.build.state === 'needs_input' ? s.build.question : null,
+		};
+	}
+
+	/* ------------------------------------------------------------ the 30-day clean-up */
+	async function removePreview(ch) {
+		const cfg = clients.cfg, host = previewHost(ch), tpl = `${cfg.templateSlug}.${cfg.previewDomain}`;
+		if (host === tpl || /^build\d*$/.test(ch.slug) || ch.stages?.golive?.done) return { skipped: 'protected' };
+		if (!clients.hostinger.available()) return { skipped: 'Hostinger API key missing' };
+		const w = (await clients.hostinger.websites()).find((x) => x.domain === host);
+		if (w) await clients.hostinger.deleteWebsite(host);
+		if (clients.gateway.available()) { try { await clients.gateway.revoke(ch.slug, true); } catch { /* best effort */ } }
+		try { fs.rmSync(dir(ch.id), { recursive: true, force: true }); } catch { /* ignore */ }
+		store.remove(ch.id);
+		return { deleted: true };
+	}
+	async function sweep() {
+		const out = { warned: 0, deleted: 0, overdue: 0 };
+		for (const ch of store.list()) {
+			const p = ch.prospect; if (!p?.expiresAt || p.kept || ch.stages?.golive?.done) continue;
+			const left = Math.ceil((p.expiresAt - now()) / DAY);
+			const flag = (k) => { if (p[k]) return false; store.update(ch.id, (c) => { c.prospect[k] = now(); }); return true; };
+			if (left <= 0) {
+				if (autoDelete) { try { const r = await removePreview(ch); if (r.deleted) { out.deleted++; await tell(ch, `Preview deleted: ${ch.name}`, `The preview for ${ch.name} reached 30 days and was deleted.`); } } catch (e) { log('prospects sweep:', e.message); } }
+				else if (flag('overdueNotified')) { out.overdue++; await tell(ch, `Preview is past its 30 days: ${ch.name}`, `${previewHost(ch)} is past its 30 days. Automatic deletion is switched off (PROSPECT_AUTODELETE), so it was left alone. Delete it in the portal or press Keep longer.`, true); }
+			} else if (left <= 2 && flag('warned2')) { out.warned++; await tell(ch, `Preview deleted in ${left} day${left === 1 ? '' : 's'}: ${ch.name}`, `${previewHost(ch)} will be deleted on ${new Date(p.expiresAt).toISOString().slice(0, 10)}. Open Prospects and press Keep longer to save it.`); }
+			else if (left <= 7 && flag('warned7')) { out.warned++; await tell(ch, `Preview deleted in ${left} days: ${ch.name}`, `${previewHost(ch)} will be deleted on ${new Date(p.expiresAt).toISOString().slice(0, 10)}. Open Prospects and press Keep longer to save it.`); }
+		}
+		return out;
+	}
+	function keep(id) {
+		const ch = store.get(id); if (!ch?.prospect) throw new Error('Not a prospect.');
+		store.update(id, (c) => { c.prospect.expiresAt = Math.max(c.prospect.expiresAt || now(), now()) + PREVIEW_DAYS * DAY; c.prospect.kept = false; for (const k of ['warned7', 'warned2', 'overdueNotified']) delete c.prospect[k]; });
+		note(id, 'Preview kept 30 more days');
+		return store.get(id);
+	}
+
+	/* ------------------------------------------------------------ routes */
+	function router({ need }) {
+		const r = express.Router();
+		r.use(need);
+		const pick = (req, res) => { const c = store.get(req.params.id); if (!c?.prospect) { res.status(404).json({ error: 'Prospect not found' }); return null; } return c; };
+		const wrap = (fn) => async (req, res) => { try { await fn(req, res); } catch (e) { res.status(e.status || 400).json({ error: e.message }); } };
+		r.get('/', (req, res) => res.json(store.list().map(view)));
+		r.get('/detect', wrap(async (req, res) => res.json(await detect(req.query.url))));
+		r.post('/', wrap(async (req, res) => { const c = await create(req.body || {}, req.by); if (req.body?.start !== false) { start(c.id); tick(c.id); } res.status(201).json(view(store.get(c.id))); }));
+		r.get('/:id', (req, res) => { const c = pick(req, res); if (c) res.json(view(c)); });
+		r.post('/:id/run', wrap(async (req, res) => { if (!pick(req, res)) return; start(req.params.id); tick(req.params.id); res.json(view(store.get(req.params.id))); }));
+		r.post('/:id/answer', wrap(async (req, res) => { if (!pick(req, res)) return; answer(req.params.id, req.body?.questionId, req.body?.answer); res.json(view(store.get(req.params.id))); }));
+		r.post('/:id/keep', wrap(async (req, res) => { if (!pick(req, res)) return; res.json(view(keep(req.params.id))); }));
+		r.post('/:id/docs', express.raw({ type: () => true, limit: MAX_DOC + 1024 }), wrap(async (req, res) => { if (!pick(req, res)) return; res.json(view(addDoc(req.params.id, decodeURIComponent(req.get('x-filename') || ''), req.body))); }));
+		r.delete('/:id/docs/:n', wrap(async (req, res) => { if (!pick(req, res)) return; removeDoc(req.params.id, req.params.n); res.json(view(store.get(req.params.id))); }));
+		r.get('/:id/package', (req, res) => { const c = pick(req, res); if (!c) return; const f = path.join(dir(c.id), 'export.zip'); if (!fs.existsSync(f)) return res.status(404).json({ error: 'No export yet.' }); res.download(f, `${c.slug}-export.zip`); });
+		r.get('/:id/admin-login', (req, res) => { const c = pick(req, res); if (!c) return; if (req.user && req.user.role !== 'admin') return res.status(403).json({ error: 'Admins only.' }); res.json({ url: `https://${previewHost(c)}/wp-admin`, login: 'cwadmin', password: adminPw(c) }); });
+		return r;
+	}
+	/** The signed endpoints the WordPress plugin calls. No sign-in: every request carries a token that is only good for one church and for a few hours. */
+	function buildRouter() {
+		const r = express.Router();
+		r.use(express.json({ limit: '50kb' }));
+		r.use('/:id', (req, res, next) => {
+			const t = req.query.t || String(req.get('authorization') || '').replace(/^Bearer\s+/i, '');
+			const id = verify(t);
+			if (!id || id !== req.params.id) return res.status(403).json({ error: 'This link has expired.' });
+			req.church = store.get(id);
+			if (!req.church?.prospect) return res.status(404).json({ error: 'Unknown church' });
+			next();
+		});
+		r.get('/:id/package.zip', (req, res) => { const f = path.join(dir(req.church.id), 'export.zip'); if (!fs.existsSync(f)) return res.status(404).json({ error: 'No export.' }); res.download(f, `${req.church.slug}-export.zip`); });
+		r.get('/:id/brief.md', (req, res) => res.type('text/markdown').send(briefFor(req.church)));
+		r.get('/:id/docs/:n', (req, res) => { const d = req.church.prospect.docs.find((x) => x.n === Number(req.params.n)); if (!d) return res.status(404).json({ error: 'Not found' }); res.download(path.join(dir(req.church.id), 'docs', `${d.n}-${d.name}`), d.name); });
+		r.get('/:id/state', (req, res) => res.json({ state: req.church.run.steps.build.state, mode: req.church.prospect.mode, answers: req.church.run.answers || {} }));
+		r.post('/:id/status', (req, res) => { try { reportBuild(req.church.id, req.body || {}); res.json({ ok: true }); } catch (e) { res.status(400).json({ error: e.message }); } });
+		return r;
+	}
+
+	let timers = [];
+	const startTimers = ({ everyMs = 6000 } = {}) => {
+		timers.push(setInterval(() => tickAll().catch((e) => log('prospects:', e.message)), everyMs).unref());
+		timers.push(setInterval(() => sweep().catch((e) => log('prospects sweep:', e.message)), 3600000).unref());
+		timers.push(setTimeout(() => sweep().catch(() => {}), 60000).unref());
+	};
+	const stopTimers = () => { for (const t of timers) { clearInterval(t); clearTimeout(t); } timers = []; };
+
+	return { create, detect, start, tick, tickAll, reportBuild, answer, addDoc, removeDoc, keep, sweep, view, router, buildRouter, sign, verify, startTimers, stopTimers, briefFor };
+}

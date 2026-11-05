@@ -54,6 +54,7 @@ export function configFromEnv(env = process.env) {
 		siteRoot: env.SITE_ROOT || '$HOME/domains/{host}/public_html',
 		wpCli: env.WP_CLI || 'wp',
 		staffLoginUser: clean(env.STAFF_LOGIN_USER) || 'churchweb', staffLoginPassword: String(env.STAFF_LOGIN_PASSWORD || '').trim(),
+		oxygenLicense: clean(env.OXYGEN_LICENSE_KEY || env.oxygen_license_key),
 		wpAdminEmail: clean(env.WP_ADMIN_EMAIL), hostingerApiBase: (env.HOSTINGER_API_BASE || 'https://developers.hostinger.com').replace(/\/$/, ''), hostingerApiKey: clean(env.HOSTINGER_API_KEY),
 		smartermailUrl: (() => { const u = clean(env.SMARTERMAIL_URL); return u ? (/^https?:\/\//i.test(u) ? u : 'https://' + u).replace(/\/$/, '') : ''; })(),
 		smartermailUser: clean(env.SMARTERMAIL_ADMIN_USER), smartermailPassword: String(env.SMARTERMAIL_ADMIN_PASSWORD || '').trim(),
@@ -72,6 +73,7 @@ export const configured = (cfg) => ({
 	hostingerIp: !!cfg.hostingerIp,
 	hostingerApi: !!cfg.hostingerApiKey,
 	staffLogin: !!cfg.staffLoginPassword,
+	oxygenLicense: !!cfg.oxygenLicense,
 });
 
 async function req(fetchFn, url, { method = 'GET', headers = {}, body, timeout = 20000 } = {}) {

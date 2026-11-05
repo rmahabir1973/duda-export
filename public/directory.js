@@ -40,7 +40,7 @@ async function load() {
 			<td>${esc(x.address) || '<span class="dash">—</span>'}</td><td>${esc(x.postal) || '<span class="dash">—</span>'}</td><td>${esc(x.phone) || '<span class="dash">—</span>'}</td>
 			<td>${x.email ? `<a href="mailto:${esc(x.email)}">${esc(x.email)}</a>` : '<span class="dash">—</span>'}</td>
 			<td>${x.website ? `<a href="${esc(safeUrl(x.website))}" target="_blank" rel="noopener noreferrer">${esc(x.website.replace(/^https?:\/\//, ''))}</a>` : '<span class="dash">—</span>'}</td>
-			<td>${x.is_customer ? '<span class="cust">✔ Customer</span>' : `<button class="pros" data-pros="${x.id}" title="Add to the Customers board as a new prospect">＋ Prospect</button>`}</td>
+			<td>${x.is_customer ? '<span class="cust">✔ Customer</span>' : `<button class="pros" data-pros="${x.id}" title="Export this church and build a preview site">＋ Prospect</button>`}</td>
 			<td><select class="oc" data-id="${x.id}">${meta.statuses.map((s) => `<option${s === x.outreach_status ? ' selected' : ''}>${esc(s)}</option>`).join('')}</select> <button class="note" data-id="${x.id}" title="${esc(x.notes) || 'Add a note'}">${x.notes ? '📝' : '＋'}</button></td></tr>`).join('') || '<tr><td colspan="11" class="hint" style="padding:24px;text-align:center">No listings match. Clear a filter, or import the directory under "Manage data".</td></tr>';
 		for (const el of document.querySelectorAll('[data-pros]')) el.onclick = () => startProspect(el.dataset.pros);
 		for (const el of document.querySelectorAll('select.oc')) el.onchange = async () => { try { await api('/api/directory/' + el.dataset.id, { method: 'PATCH', body: JSON.stringify({ status: el.value }) }); } catch (e) { $('err').textContent = e.message; } };
@@ -48,16 +48,10 @@ async function load() {
 	} catch (e) { $('err').textContent = e.message; }
 	$('export').href = '/api/directory/export.csv?' + query();
 }
-async function startProspect(id) {
+function startProspect(id) {
 	const x = rowsById[id]; if (!x) return;
-	if (!confirm(`Add "${x.name}" to the Customers board as a new prospect?`)) return;
-	const body = { name: x.name, kind: 'new', contactEmail: x.email || '', notes: `From the United Church directory: ${[x.city, x.province].filter(Boolean).join(', ')}` };
-	const send = (domain) => api('/api/deploy/churches', { method: 'POST', body: JSON.stringify({ ...body, domain }) });
-	try {
-		let c; try { c = await send(x.website || ''); } catch (e) { c = await send(''); }
-		await api('/api/directory/' + id, { method: 'PATCH', body: JSON.stringify({ status: 'to contact' }) });
-		alert(`Added. Find "${c.name}" on the Customers board under Prospect.`); load();
-	} catch (e) { $('err').textContent = e.message; }
+	const p = new URLSearchParams({ url: x.website || '', name: x.name || '', email: x.email || '', dir: String(id) });
+	location.href = '/prospects?' + p.toString();
 }
 const refresh = () => { offset = 0; load(); };
 for (const id of ['province', 'listing', 'sort', 'council', 'hasWebsite', 'customer', 'status']) $(id).addEventListener('change', refresh);

@@ -6,7 +6,7 @@ $('f').addEventListener('submit', async (e) => {
 	const r = await fetch('/api/account/password', { method: 'POST', headers: H, body: JSON.stringify({ current: $('cur').value, next: $('nw').value }) });
 	const j = await r.json().catch(() => ({}));
 	if (!r.ok) return ($('err').textContent = j.error || 'Could not change the password.');
-	$('ok').textContent = 'Password changed. Taking you to the portal…'; setTimeout(() => (location.href = '/deploy'), 900);
+	$('ok').textContent = 'Password changed. Taking you to the portal…'; setTimeout(() => (location.href = '/prospects'), 900);
 });
 
 fetch('/api/account/2fa', { headers: H }).then((r) => r.json()).then((t) => { $('tfs').textContent = t.enabled ? `Two-step is on. ${t.recoveryLeft} recovery codes left.` : 'Two-step is not set up yet.'; });

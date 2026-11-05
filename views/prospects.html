@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Prospects · ChurchWeb Global</title><meta name="robots" content="noindex,nofollow"><link rel="stylesheet" href="/assets/style.css"></head>
+<body>
+<header id="topbar"></header><script src="/assets/nav.js"></script>
+<main>
+  <details class="card pr-new" id="newBox" open>
+    <summary><b>New prospect</b> <span class="hint">Add a church website and the portal does the rest.</span></summary>
+    <form id="newForm" autocomplete="off">
+      <div class="pr-grid">
+        <div><label for="nUrl">Church website address</label><input id="nUrl" type="text" placeholder="britanniaunited.ca" required><div class="hint" id="nDetect"></div></div>
+        <div><label for="nName">Church name</label><input id="nName" type="text" maxlength="80" placeholder="Filled in for you from the website"></div>
+        <div><label for="nEmail">Contact email</label><input id="nEmail" type="text" placeholder="office@church.ca (optional)"></div>
+      </div>
+      <div class="pr-mode" role="radiogroup" aria-label="What to build">
+        <label class="pr-opt"><input type="radio" name="mode" value="preview" checked><span><b>Preview</b><small>Home page plus 5 key pages. Best for a first look.</small></span></label>
+        <label class="pr-opt"><input type="radio" name="mode" value="full"><span><b>Full site</b><small>Every page. The AI may ask about duplicates.</small></span></label>
+      </div>
+      <details class="pr-more"><summary>Add more information (optional)</summary>
+        <label for="nNotes">Anything the AI should know</label>
+        <textarea id="nNotes" rows="3" maxlength="2000" placeholder="For example: they want a calm, traditional look. The minister is Rev. Smith."></textarea>
+        <label for="nFiles">Documents (text, Word, PDF, spreadsheet)</label>
+        <input id="nFiles" type="file" multiple accept=".txt,.md,.csv,.html,.htm,.rtf,.pdf,.doc,.docx,.odt,.xls,.xlsx">
+      </details>
+      <div class="btns"><button class="primary" type="submit" id="nGo">Export site</button></div>
+      <p class="err" id="nErr"></p>
+    </form>
+  </details>
+  <div id="list"></div>
+  <p class="hint" id="empty" hidden>No prospects yet. Add the first one above, or press "Prospect" on a church in the Directory.</p>
+  <details class="sect" id="oldBox" hidden><summary>Earlier customers <span class="hint" id="oldN"></span></summary><div id="old" class="pr-old"></div></details>
+</main>
+<script src="/assets/prospects.js"></script>
+</body></html>
