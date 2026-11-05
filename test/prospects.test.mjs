@@ -15,7 +15,7 @@ const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'pros-'));
 const DAY = 86400000;
 const OK = new Set(['ok', 'info', 'warn']);
 
-function rig({ cwai = false, hostFails = false, autoDelete = false, golive = false } = {}) {
+function rig({ ssh = null, cwai = false, hostFails = false, autoDelete = false, golive = false } = {}) {
 	const dir = tmp(), store = createStore(path.join(dir, 'deploy'));
 	const clock = { t: 1_800_000_000_000 }, mail = [], hostDeleted = [], bg = [], wp = [];
 	const st = { a: 'no', b: 'no', c: 'no' };
@@ -38,6 +38,7 @@ function rig({ cwai = false, hostFails = false, autoDelete = false, golive = fal
 		http: { get: async () => ({ status: 200, text: '<html><title>Grace United Church | Home</title><link href="https://static.cdn-website.com/x.css"></html>' }) },
 		hostinger: { available: () => true, websites: async () => [{ domain: 'grace-united-church.churchwebglobal.com' }], deleteWebsite: async (d) => { hostDeleted.push(d); } },
 		gateway: { available: () => false },
+		...(ssh ? { ssh } : {}),
 	};
 	const exporter = { enqueue: async (b) => { calls.enqueue.push(b); return { id: 'job1' }; }, get: () => job };
 	const p = createProspects({ store, clients, exporter, dataDir: dir, notify: async (m) => { mail.push(m); }, secret: 'k', now: () => clock.t, autoDelete, alertTo: ['boss@x.ca'], baseUrl: 'https://portal.test', engine, log: () => {} });
@@ -302,4 +303,25 @@ test('a silent build is asked directly: the site\'s own saved state shows the re
 	r.p.start(c.id); await r.p.tick(c.id); r.clock.t += 90000;
 	Object.assign(r.optionResult, { out: JSON.stringify({ state: 'failed', message: 'old', updated: Math.floor((r.clock.t - 3600000) / 1000) }) });
 	await r.p.tick(c.id); assert.notEqual(r.store.get(c.id).run.steps.build.message, 'old');
+});
+
+test('the ZIP and the brief are put on the site over SSH, the build imports them from there, and the site is polled for questions', async () => {
+	const puts = [], ssh = { available: () => true, exec: async (cmd, o = {}) => {
+		if (/^echo \$HOME/.test(cmd)) return { code: 0, out: '/home/u1\n', err: '' };
+		const m = /cat > '([^']+)'/.exec(cmd); if (m) { puts.push({ to: m[1], bytes: o.input.length }); return { code: 0, out: String(o.input.length), err: '' }; }
+		return { code: 0, out: '', err: '' };
+	} };
+	const r = rig({ cwai: true, ssh }); const c = await make(r); r.p.start(c.id);
+	r.job.status = 'done'; for (let i = 0; i < 4; i++) await r.p.tick(c.id);
+	assert.deepEqual(puts.map((p) => p.to), ['/home/u1/cwai-portal/grace-united-church/package.zip', '/home/u1/cwai-portal/grace-united-church/brief.md']); assert.equal(puts[0].bytes, 3);
+	assert.match(r.bg[0], /--package='\/home\/u1\/cwai-portal\/grace-united-church\/package\.zip'/); assert.match(r.bg[0], /--brief='\/home\/u1\/cwai-portal\/grace-united-church\/brief\.md'/); assert.doesNotMatch(r.bg[0], /https:\/\/portal\.test\/api\/build\/[^/]+\/package/);
+	// the site asks a question, but its message to the portal never arrives: the portal finds it by asking the site
+	r.clock.t += 20000;
+	Object.assign(r.optionResult, { code: 0, out: JSON.stringify({ state: 'question', message: 'The AI needs an answer to carry on.', question: { text: 'Which logo?', options: ['A', 'B'] }, updated: Math.floor(r.clock.t / 1000) }) });
+	await r.p.tick(c.id);
+	const ch = r.store.get(c.id); assert.equal(ch.run.state, 'needs_input'); assert.equal(r.p.view(ch).question.text, 'Which logo?'); assert.deepEqual(r.p.view(ch).question.options, ['A', 'B']);
+	// a failed copy is a plain failure, not a hang
+	const bad = rig({ cwai: true, ssh: { available: () => true, exec: async (cmd) => (/^echo/.test(cmd) ? { code: 0, out: '/home/u1', err: '' } : { code: 1, out: '', err: 'No space left on device' }) } }); const d = await make(bad); bad.p.start(d.id);
+	bad.job.status = 'done'; for (let i = 0; i < 4; i++) await bad.p.tick(d.id);
+	assert.equal(bad.store.get(d.id).run.steps.build.state, 'failed'); assert.match(bad.store.get(d.id).run.steps.build.message, /Could not copy package\.zip/);
 });

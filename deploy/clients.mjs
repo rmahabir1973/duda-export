@@ -219,7 +219,7 @@ export function makeClients(cfg, deps = {}) {
 	// Run commands on the Hostinger account over SSH (ssh2 is loaded only when it is used).
 	const ssh = deps.ssh || {
 		available: () => !!(cfg.sshHost && cfg.sshUser && (cfg.sshKey || cfg.sshPassword)),
-		async exec(cmd, { timeout = 120000 } = {}) {
+		async exec(cmd, { timeout = 120000, input } = {}) {
 			const { Client } = await import('ssh2');
 			return new Promise((resolve, reject) => {
 				const c = new Client(); let out = '', err = '';
@@ -227,6 +227,7 @@ export function makeClients(cfg, deps = {}) {
 				c.on('ready', () => c.exec(cmd, (e, stream) => {
 					if (e) { clearTimeout(timer); c.end(); return reject(e); }
 					stream.on('data', (d) => (out += d)).stderr.on('data', (d) => (err += d));
+					if (input !== undefined) stream.end(input);
 					stream.on('close', (code) => { clearTimeout(timer); c.end(); resolve({ code, out, err }); });
 				})).on('error', (e) => { clearTimeout(timer); reject(e); })
 					.connect({ host: cfg.sshHost, port: cfg.sshPort, username: cfg.sshUser, ...(cfg.sshKey ? { privateKey: cfg.sshKey, passphrase: cfg.sshPassphrase || undefined } : { password: cfg.sshPassword }), readyTimeout: 15000 });
