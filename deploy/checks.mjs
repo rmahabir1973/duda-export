@@ -3,7 +3,7 @@
 // Tests only read. Fixes only run when someone presses the button, and only for a requirement that tested "no".
 import { classifyDns, planWebRecords, mergeSpf, planPostmarkRecords, planMailRecords } from './dnscheck.mjs';
 import { shq, randomPassword } from './clients.mjs';
-import { buildDnsPlan } from './dnsplan.mjs';
+import { buildDnsPlan, planOps } from './dnsplan.mjs';
 
 /* ------------------------------------------------------------------ small helpers */
 const R = (state, detail = '') => ({ state, detail });
@@ -82,6 +82,56 @@ export async function customerPlan(ctx, ch) {
 	let nameservers = []; if (z) { try { nameservers = (await cf.zone(z.id)).name_servers || []; } catch { /* shown later */ } }
 	const email = ch.plan === 'email';
 	return { domain: ch.domain, zone: !!z, zoneStatus: z?.status || '', nameservers, hostingerIp: cfg.hostingerIp || '', cloudflare: cf.available(), copiedFromPublic: inv.length, lines: buildDnsPlan({ domain: ch.domain, hostingerIp: cfg.hostingerIp, email, mailIp: cfg.mailIp, existing, inventory: inv }) };
+}
+
+/**
+ * Set up the church's DNS in OUR Cloudflare from the plan: add the domain if needed, copy their records, add the website and email records.
+ * Nothing goes live until the church switches its nameservers. Records are written DNS-only; a wrong record is corrected in place, never deleted.
+ */
+export async function customerDnsSetup(ctx, ch) {
+	const cf = ctx.c.cloudflare;
+	if (!cf.available()) throw new Error('Cloudflare isn\'t connected on this server.');
+	if (!ctx.c.cfg.hostingerIp) throw new Error('HOSTINGER_IP isn\'t set on this server, so the website records can\'t be made.');
+	if (!ch.domain) throw new Error('This customer has no domain yet.');
+	let z = await zoneOf(ctx, ch.domain), created = false;
+	if (!z) { z = await cf.createZone(ch.domain); created = true; ctx.memo = {}; }
+	const p = await customerPlan(ctx, ch), { ops, flagged } = planOps(p.lines), done = [], errors = [];
+	for (const o of ops) {
+		const body = { type: o.type, name: o.name, content: o.content, proxied: false, ...(o.priority != null ? { priority: o.priority } : {}) };
+		try { if (o.op === 'update') await cf.updateRecord(z.id, o.id, body); else await cf.createRecord(z.id, body); done.push(`${o.op === 'update' ? 'Corrected' : 'Added'} ${o.type} ${o.name}`); }
+		catch (e) { errors.push(`${o.type} ${o.name}: ${String(e.message || e).slice(0, 160)}`); }
+	}
+	ctx.memo = {};
+	return { created, zoneStatus: z.status || '', nameservers: z.name_servers || p.nameservers || [], done, flagged, errors };
+}
+
+/** Does the world see what we planned? Looks only. Each check is ok, no, warn or info (informational). */
+export async function customerTest(ctx, ch) {
+	const p = await customerPlan(ctx, ch), dns = ctx.c.dns, d = ch.domain, checks = [];
+	const add = (id, label, state, detail = '') => checks.push({ id, label, state, detail });
+	const norm = (t) => String(Array.isArray(t) ? t.join('') : t).replace(/^"|"$/g, '').trim().toLowerCase();
+	const ns = (await dns.ns(d)).map((n) => String(n).toLowerCase().replace(/\.$/, '')), want = (p.nameservers || []).map((n) => n.toLowerCase());
+	if (!p.zone) add('zone', 'The domain is in our Cloudflare', 'no', 'Not yet. Press Set up DNS.');
+	else add('ns', 'The domain uses our nameservers', ns.length && ns.every((n) => want.includes(n)) ? 'ok' : 'no', ns.length ? `Right now: ${ns.join(', ')}. Ours: ${want.join(', ')}.` : 'No nameservers were found for this domain.');
+	for (const l of p.lines) {
+		if (l.action === 'replace' && l.content === l.was) continue; // an old record that is going away
+		if (l.action === 'later') { add(`${l.type}:${l.name}`, `${l.type} ${l.name}`, 'info', l.note || 'Switched on later.'); continue; }
+		if (l.action === 'copy' && !['MX', 'TXT'].includes(l.type) && !/^(mail|autodiscover|autoconfig)\./.test(l.name) && l.name !== d && l.name !== 'www.' + d) continue; // other copied records are not what we are proving here
+		const label = `${l.type} ${l.name}`; let ok = false, seen = '';
+		try {
+			if (l.type === 'A' && l.proxy) { const a = await dns.a(l.name); ok = a.length > 0; seen = a.join(', '); }
+			else if (l.type === 'CNAME' && l.proxy) { const a = await dns.a(l.name); ok = a.length > 0; seen = a.join(', '); }
+			else if (l.type === 'A') { const a = await dns.a(l.name); ok = a.includes(l.content); seen = a.join(', '); }
+			else if (l.type === 'CNAME') { const c = (await dns.cname(l.name)).map((x) => String(x).toLowerCase().replace(/\.$/, '')); ok = c.includes(l.content.toLowerCase()); seen = c.join(', '); }
+			else if (l.type === 'MX') { const m = (await dns.mx(l.name)).map((x) => String(x.exchange).toLowerCase().replace(/\.$/, '')); ok = m.includes(l.content.toLowerCase()); seen = m.join(', '); }
+			else if (l.type === 'TXT') { const t = (await dns.txt(l.name)).map(norm); ok = t.includes(norm(l.content)); seen = t.join(' | '); }
+			else continue;
+		} catch (e) { seen = 'lookup failed'; }
+		add(`${l.type}:${l.name}`, label, ok ? 'ok' : 'no', ok ? '' : seen ? `Seen: ${seen.slice(0, 140)}. Expected: ${l.content}` : `Nothing found. Expected: ${l.content}`);
+	}
+	const site = await isOurSite(ctx, d);
+	add('site', `https://${d} shows our new site`, site.ours ? 'ok' : 'info', site.ours ? '' : 'Not showing yet. That is expected until the site is moved onto the real domain.');
+	return { domain: d, checks, ok: checks.every((c) => c.state === 'ok' || c.state === 'info'), nameservers: p.nameservers || [] };
 }
 
 /** Run one WP-CLI command on a church's preview site. Returns { code, out, err } or { unavailable } / { missing }. */

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createStore } from '../deploy/store.mjs';
 import { createCustomers, cleanDomain } from '../deploy/customers.mjs';
-import { buildDnsPlan, planCounts } from '../deploy/dnsplan.mjs';
+import { buildDnsPlan, planCounts, planOps } from '../deploy/dnsplan.mjs';
 
 const base = { domain: 'carlisleuc.ca', hostingerIp: '1.2.3.4', mailIp: '212.28.180.63' };
 const find = (lines, type, name) => lines.filter((l) => l.type === type && l.name === name);
@@ -103,4 +103,40 @@ test('plan route: only customers have a plan, and it carries their choices', asy
 	await assert.rejects(() => cu.plan('abc'), /Not a customer/);
 	cu.convert('abc', { domain: 'abc.ca', dns: 'ours', email: true });
 	const p = await cu.plan('abc'); assert.equal(p.dns, 'ours'); assert.equal(p.email, true); assert.deepEqual(p.counts, { create: 1 }); assert.equal(p.plan, 'email');
+});
+
+test('planOps: a wrong record is corrected in place, a stray one is left for a person, nothing is deleted, later lines are skipped', () => {
+	const lines = [
+		{ type: 'A', name: 'a.ca', content: '1.2.3.4', proxy: true, action: 'create' },
+		{ type: 'A', name: 'a.ca', content: '9.9.9.9', proxy: false, action: 'replace', was: '9.9.9.9', id: 'old1' },
+		{ type: 'AAAA', name: 'a.ca', content: '2600::1', proxy: false, action: 'replace', was: '2600::1', id: 'old2' },
+		{ type: 'TXT', name: 'a.ca', content: 'v=spf1 ip4:212.28.180.63 ~all', action: 'replace', was: 'v=spf1 include:churchwebsupport.com ~all', id: 'spf1' },
+		{ type: 'MX', name: 'a.ca', content: 'mail.a.ca', priority: 10, action: 'copy' },
+		{ type: 'TXT', name: 'k._domainkey.a.ca', content: 'x', action: 'later' },
+		{ type: 'TXT', name: '_dmarc.a.ca', content: 'v=DMARC1; p=quarantine; pct=100', action: 'keep' },
+	];
+	const { ops, flagged } = planOps(lines);
+	assert.deepEqual(ops.map((o) => [o.op, o.type, o.id || '']), [['update', 'A', 'old1'], ['update', 'TXT', 'spf1'], ['create', 'MX', '']]);
+	assert.equal(ops[0].content, '1.2.3.4');
+	assert.equal(ops[2].priority, 10);
+	assert.equal(flagged.length, 1); assert.match(flagged[0], /AAAA a\.ca/);
+});
+
+test('nameserver email: needs the Cloudflare nameservers first, asks for a DNS screenshot and warns about DNSSEC; sending validates and records it', async () => {
+	const sent = [];
+	const store = createStore(fs.mkdtempSync(path.join(os.tmpdir(), 'cust-')));
+	const engine = { customerPlan: async () => ({}), customerDnsSetup: async () => ({ created: true, nameservers: ['ada.ns.cloudflare.com', 'bob.ns.cloudflare.com'], done: ['Added A a.ca'], flagged: [], errors: [] }), customerTest: async () => ({ ok: true, checks: [] }) };
+	const cu = createCustomers({ store, ctxFor: () => ({ c: { cfg: { previewDomain: 'x.com' } } }), engine, send: async (m) => { sent.push(m); }, from: 'support@churchwebglobal.com', now: () => 5 });
+	store.create({ name: 'A Church', slug: 'abc', domain: 'a.ca' }); store.update('abc', (c) => { c.prospect = { domain: 'a.ca', createdAt: 1 }; c.run = { state: 'done' }; });
+	cu.convert('abc', { domain: 'a.ca', dns: 'ours', contactEmail: 'office@a.ca' }, 'ryan');
+	await assert.rejects(() => cu.nsEmail('abc'), /Set up DNS/);
+	const r = await cu.setup('abc', 'ryan'); assert.equal(r.done.length, 1);
+	const d = await cu.nsEmail('abc');
+	assert.equal(d.to, 'office@a.ca'); assert.match(d.body, /ada\.ns\.cloudflare\.com/); assert.match(d.body, /DNSSEC/); assert.match(d.body, /screenshot/);
+	await assert.rejects(() => cu.nsEmailSend('abc', { to: 'bad', subject: 's', body: d.body }), /email address/);
+	await cu.nsEmailSend('abc', { to: 'office@a.ca', subject: d.subject, body: d.body }, 'chad');
+	assert.equal(sent.length, 1); assert.equal(sent[0].From, 'support@churchwebglobal.com'); assert.equal(sent[0].To, 'office@a.ca');
+	assert.equal(store.get('abc').customer.nsEmailAt, 5);
+	cu.save('abc', { domain: 'a.ca', dns: 'theirs', email: false }, 'ryan');
+	await assert.rejects(() => cu.setup('abc'), /manages its own/);
 });

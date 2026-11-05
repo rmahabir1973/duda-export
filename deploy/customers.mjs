@@ -6,10 +6,10 @@ const DOMAIN_RE = /^(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 export const cleanDomain = (v) => String(v || '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/[/?#].*$/, '').replace(/\.$/, '');
 
-export function createCustomers({ store, ctxFor, engine, now = Date.now }) {
+export function createCustomers({ store, ctxFor, engine, send = null, from = 'support@churchwebglobal.com', now = Date.now }) {
 	const view = (c) => {
 		const cu = c.customer, cfg = ctxFor().c.cfg;
-		return { id: c.id, name: c.name, domain: c.domain, dns: cu.dns, email: !!cu.email, contactEmail: c.contactEmail || '', since: cu.at, by: cu.by || '', previewUrl: c.prospect ? `https://${c.slug}.${cfg.previewDomain}` : '', live: !!c.stages?.golive?.done };
+		return { id: c.id, name: c.name, domain: c.domain, dns: cu.dns, email: !!cu.email, contactEmail: c.contactEmail || '', since: cu.at, by: cu.by || '', previewUrl: c.prospect ? `https://${c.slug}.${cfg.previewDomain}` : '', live: !!c.stages?.golive?.done, dnsSetupAt: cu.dnsSetupAt || 0, nsEmailAt: cu.nsEmailAt || 0, nsEmailTo: cu.nsEmailTo || '' };
 	};
 	const list = () => store.list().filter((c) => c.customer).map(view);
 
@@ -50,6 +50,56 @@ export function createCustomers({ store, ctxFor, engine, now = Date.now }) {
 		return { ...p, counts: planCounts(p.lines), dns: ch.customer.dns, email: !!ch.customer.email };
 	}
 
+	async function setup(id, by = '') {
+		const ch = store.get(id); if (!ch?.customer) throw new Error('Not a customer.');
+		if (ch.customer.dns !== 'ours') throw new Error('This church manages its own DNS.');
+		const r = await engine.customerDnsSetup(ctxFor(), ch);
+		store.update(id, (c) => { c.customer.dnsSetupAt = now(); c.customer.nameservers = r.nameservers; });
+		store.log(id, by, `DNS set up in Cloudflare${r.created ? ' (domain added)' : ''}: ${r.done.length} records written${r.errors.length ? `, ${r.errors.length} failed` : ''}`);
+		return r;
+	}
+	/** The editable nameserver-change email for the church. Includes the "send us your current DNS" request and a DNSSEC warning. */
+	async function nsEmail(id) {
+		const ch = store.get(id); if (!ch?.customer) throw new Error('Not a customer.');
+		const ns = ch.customer.nameservers || [];
+		if (!ns.length) throw new Error('Set up DNS in Cloudflare first, so we know which nameservers to give them.');
+		const d = ch.domain;
+		const body = `Hello,
+
+We're getting ${ch.name} ready to launch the new website on ${d}. To switch it on, the domain's nameservers need to be changed at the company where ${d} is registered (for example GoDaddy, Namecheap, Telus or Shaw).
+
+1. Before changing anything, please send us a screenshot or a "Print to PDF" of the full list of DNS records for ${d} (your registrar or web host has a DNS or "Manage DNS" page). We copy your records over for you, and this is a safety check so that nothing is missed.
+
+2. Then replace the existing nameservers with these two:
+
+   ${ns.join('\n   ')}
+
+3. If your registrar shows a setting called DNSSEC, please turn it off before you change the nameservers. Leaving it on can make the website and email stop working.
+
+The change normally takes effect within an hour or two, but it can take up to 48 hours. Your website and email keep working during the switch.
+
+If you would rather not do this yourself, just reply and tell us who looks after your domain and we'll write to them directly.
+
+Thank you,
+ChurchWeb Support`;
+		return { to: ch.contactEmail || '', subject: `Action needed: switching ${d} to your new website`, body, nameservers: ns, from };
+	}
+	async function nsEmailSend(id, o = {}, by = '') {
+		const ch = store.get(id); if (!ch?.customer) throw new Error('Not a customer.');
+		if (!send) throw new Error('Email sending (Postmark) isn\'t set up on this server.');
+		const to = String(o.to || '').trim(), subject = String(o.subject || '').trim(), body = String(o.body || '').trim();
+		if (!EMAIL_RE.test(to)) throw new Error('Enter the email address to send this to.');
+		if (!subject || body.length < 20) throw new Error('The email needs a subject and some text.');
+		await send({ From: from, To: to, ReplyTo: from, Subject: subject, TextBody: body, MessageStream: 'outbound' });
+		store.update(id, (c) => { c.customer.nsEmailAt = now(); c.customer.nsEmailTo = to; });
+		store.log(id, by, `Nameserver email sent to ${to}`);
+		return { ok: true, at: now(), to };
+	}
+	async function test(id) {
+		const ch = store.get(id); if (!ch?.customer) throw new Error('Not a customer.');
+		return engine.customerTest(ctxFor(), ch);
+	}
+
 	function router({ need }) {
 		const r = express.Router(); r.use(need);
 		const wrap = (fn) => async (req, res) => { try { await fn(req, res); } catch (e) { res.status(e.status || 400).json({ error: e.message }); } };
@@ -58,7 +108,11 @@ export function createCustomers({ store, ctxFor, engine, now = Date.now }) {
 		r.post('/:id/settings', wrap(async (req, res) => { if (!store.get(req.params.id)?.customer) throw new Error('Not a customer.'); res.json(save(req.params.id, req.body || {}, req.by)); }));
 		r.post('/:id/revert', wrap(async (req, res) => res.json(revert(req.params.id, req.by))));
 		r.get('/:id/plan', wrap(async (req, res) => res.json(await plan(req.params.id))));
+		r.post('/:id/dns/setup', wrap(async (req, res) => res.json(await setup(req.params.id, req.by))));
+		r.get('/:id/ns-email', wrap(async (req, res) => res.json(await nsEmail(req.params.id))));
+		r.post('/:id/ns-email/send', wrap(async (req, res) => res.json(await nsEmailSend(req.params.id, req.body || {}, req.by))));
+		r.get('/:id/test', wrap(async (req, res) => res.json(await test(req.params.id))));
 		return r;
 	}
-	return { convert, save, revert, plan, list, view, router };
+	return { setup, nsEmail, nsEmailSend, test, convert, save, revert, plan, list, view, router };
 }
