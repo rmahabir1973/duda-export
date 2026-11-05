@@ -171,6 +171,7 @@ export function makeClients(cfg, deps = {}) {
 			return out;
 		},
 		async createRecord(zoneId, rec) { return (await cfCall('POST', `/zones/${zoneId}/dns_records`, { ttl: 1, proxied: false, ...rec })).result; },
+		async deleteRecord(zoneId, id) { return (await cfCall('DELETE', `/zones/${zoneId}/dns_records/${id}`)).result; },
 		async updateRecord(zoneId, id, rec) { return (await cfCall('PUT', `/zones/${zoneId}/dns_records/${id}`, { ttl: 1, proxied: false, ...rec })).result; },
 	};
 

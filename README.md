@@ -296,3 +296,9 @@ Portal callback endpoints (no sign-in, signed token per church): `/api/build/:id
 - **Customers page** now has Build full site, Move preview to the live domain (add domain, certificate, WordPress address, preview off, www/robots/sitemap, then Cloudflare proxy on), the email setup history and a per-customer History.
 - **Email setup** remembers the fields (never the password), keeps working if you leave the page, and shows the last result of each step when you return. Results are also kept on the customer.
 - **AI cost** shows a running total for the church since its preview began, beside the preview and full-site figures.
+
+## v10.3
+- Customers list shows Site (Preview / Full / Live), email setup progress and AI cost on every row.
+- DNS plan lists every other record already in the zone (old Namecheap forwarding MX, stray records) with a **Remove** button (confirmed). The website and standard mail records can't be removed from here.
+- Email setup has a customer picker, fills the domain and mailbox names, and shows what has been done.
+- A web address pasted as the church name is replaced by the name found on the site (cleaner Hostinger site names).

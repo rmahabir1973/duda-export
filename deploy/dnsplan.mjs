@@ -25,9 +25,10 @@ export function buildDnsPlan({ domain, hostingerIp, email = false, mailIp = '', 
 	const mark = (r) => handled.add(`${r.type}|${lc(r.name)}|${lc(r.content)}`);
 	const want = (type, name, content, extra = {}) => {
 		const have = at(existing, type, name).some((r) => lc(r.content) === lc(content));
-		lines.push({ type, name, content, proxy: false, action: have ? 'keep' : 'create', ...extra });
+		const hit = at(existing, type, name).find((r) => lc(r.content) === lc(content));
+		lines.push({ type, name, content, proxy: false, action: have ? 'keep' : 'create', ...(hit ? { id: hit.id } : {}), ...extra });
 	};
-	const replaceOld = (type, name, content) => { for (const r of at(src, type, name)) { if (lc(r.content) !== lc(content)) lines.push({ type: r.type, name: r.name, content: r.content, proxy: false, action: 'replace', was: r.content, id: r.id, note: 'The old record is not copied: the new one takes its place.' }); mark(r); } };
+	const replaceOld = (type, name, content) => { for (const r of at(src, type, name)) { if (lc(r.content) !== lc(content)) lines.push({ type: r.type, name: r.name, content: r.content, proxy: false, action: 'replace', was: r.content, id: r.id, removable: !!r.id, note: 'The old record is not copied: the new one takes its place.' }); mark(r); } };
 
 	// the website
 	if (hostingerIp) {
@@ -42,7 +43,7 @@ export function buildDnsPlan({ domain, hostingerIp, email = false, mailIp = '', 
 		for (const n of ['autodiscover', 'autoconfig']) { want('CNAME', `${n}.${d}`, mail); replaceOld('CNAME', `${n}.${d}`, mail); replaceOld('A', `${n}.${d}`, ''); }
 		const mxHave = at(existing, 'MX', d).some((r) => lc(r.content) === mail), mxToday = at(src, 'MX', d).some((r) => lc(r.content) === mail);
 		lines.push({ type: 'MX', name: d, content: mail, priority: 10, proxy: false, action: mxHave ? 'keep' : mxToday ? 'copy' : 'create', note: '' });
-		for (const r of at(src, 'MX', d)) { mark(r); if (lc(r.content) !== mail) lines.push({ type: 'MX', name: d, content: r.content, priority: r.priority, proxy: false, action: existing.length ? 'keep' : 'copy', note: 'An old mail route. Remove it by hand once mail has moved to us.' }); }
+		for (const r of at(src, 'MX', d)) { mark(r); if (lc(r.content) !== mail) lines.push({ type: 'MX', name: d, content: r.content, priority: r.priority, proxy: false, action: existing.length ? 'keep' : 'copy', id: r.id, removable: !!existing.length, note: 'An old mail route.' }); }
 		// SPF: keep what else they send from, drop the old brand's include, add our mail server
 		const oldSpf = at(src, 'TXT', d).filter((r) => /^"?v=spf1/i.test(r.content));
 		const spf = mergeSpf(oldSpf.map((r) => r.content.replace(/^"|"$/g, '').split(/\s+/).filter((t) => !LEGACY.test(t)).join(' ')), { ip4: mailIp ? [mailIp] : [] });
@@ -59,6 +60,14 @@ export function buildDnsPlan({ domain, hostingerIp, email = false, mailIp = '', 
 	}
 	// everything else they have today is copied as it is (only while our zone is still empty)
 	if (!existing.length) for (const r of inventory) if (!handled.has(`${r.type}|${lc(r.name)}|${lc(r.content)}`)) lines.push({ type: r.type, name: r.name, content: r.content, priority: r.priority, proxy: false, action: 'copy' });
+	// records already in our zone that are not part of the standard set: show them, and let a person remove the ones that don't belong
+	if (existing.length) {
+		const known = new Set(lines.map((l) => `${l.type}|${lc(l.name)}|${lc(l.content)}`));
+		for (const r of existing) {
+			if (['NS', 'SOA', 'CAA'].includes(r.type) || known.has(`${r.type}|${lc(r.name)}|${lc(r.content)}`) || handled.has(`${r.type}|${lc(r.name)}|${lc(r.content)}`)) continue;
+			lines.push({ type: r.type, name: r.name, content: r.content, priority: r.priority, proxy: false, action: 'keep', id: r.id, removable: true, note: 'Not part of the standard set.' });
+		}
+	}
 	return lines;
 }
 
@@ -68,7 +77,7 @@ export function buildDnsPlan({ domain, hostingerIp, email = false, mailIp = '', 
  */
 export function planOps(lines) {
 	const key = (l) => `${l.type}|${lc(l.name)}`, olds = new Map(), ops = [], flagged = [];
-	for (const l of lines) if (l.action === 'replace' && l.id && l.content === l.was) { const k = key(l); olds.set(k, [...(olds.get(k) || []), l]); }
+	for (const l of lines) if (l.action === 'replace' && l.id && l.content === l.was) { l.removable = true; const k = key(l); olds.set(k, [...(olds.get(k) || []), l]); }
 	for (const l of lines) {
 		const wanted = l.action === 'create' || l.action === 'copy' || (l.action === 'replace' && l.content !== l.was);
 		if (!wanted) continue;

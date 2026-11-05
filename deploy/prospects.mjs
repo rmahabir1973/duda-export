@@ -378,7 +378,7 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 	}
 	async function create({ url, name, contactEmail, mode, notes }, by = '') {
 		const d = await detect(url);
-		const nm = String(name || '').trim() || d.name;
+		const typed = String(name || '').trim(), nm = (typed && !/^(https?:|www\.)|\.[a-z]{2,}\/?$/i.test(typed)) ? typed : d.name; // a pasted address isn't a church name
 		let slug = slugify(nm).slice(0, 30).replace(/-+$/g, ''), n = 1;
 		const base = slug;
 		while (!SLUG_RE.test(slug) || store.get(slug)) { n++; slug = (base.slice(0, 27) + '-' + n).replace(/-+/g, '-'); if (n > 50) throw new Error('Could not make a short name for this church.'); }
