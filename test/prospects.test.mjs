@@ -16,20 +16,20 @@ const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'pros-'));
 const DAY = 86400000;
 const OK = new Set(['ok', 'info', 'warn']);
 
-function rig({ ssh = null, cwai = false, hostFails = false, autoDelete = false, golive = false, gw = null } = {}) {
+function rig({ extra = null, ssh = null, cwai = false, hostFails = false, autoDelete = false, golive = false, gw = null } = {}) {
 	const dir = tmp(), store = createStore(path.join(dir, 'deploy'));
 	const clock = { t: 1_800_000_000_000 }, mail = [], hostDeleted = [], bg = [], wp = [];
 	const st = { a: 'no', b: 'no', c: 'no' };
 	const job = { status: 'queued', summary: { pages: 6, images: 14, zipMB: 3.2 }, lastLog: 'reading page 2', zipPath: path.join(dir, 'e.zip'), platform: 'DUDA' };
 	fs.writeFileSync(job.zipPath, 'zip');
-	const calls = { fix: [], enqueue: [] };
+	const calls = { fix: [], enqueue: [] }, sites = [];
 	const optionResult = { code: 1, out: '', err: '' };
 	const loginResult = { code: 0, out: 'Success: hi\nhttps://grace-united-church.churchwebglobal.com/?cwai_login=' + 'a'.repeat(64) + '\n', err: '' };
 	const engine = {
 		STAGES: [{ key: 'preview', reqs: [{ id: 'dns', label: 'dns', fix: true }, { id: 'hostingerPlugins', label: 'hp', fix: true }, { id: 'a', label: 'a', fix: true }, { id: 'b', label: 'b', fix: true }, { id: 'c', label: 'c', fix: true }, { id: 'oxygen', label: 'Oxygen', manual: true }] }],
 		reqsFor: (s) => s.reqs, isSatisfied: (x) => OK.has(x),
 		testStage: async (ctx, ch) => ({ dns: { state: 'no' }, hostingerPlugins: { state: 'no' }, a: { state: st.a }, b: { state: st.b }, c: { state: st.c }, oxygen: { state: ch.stages?.preview?.manual?.oxygen ? 'ok' : 'no' } }),
-		fixReq: async (ctx, ch, stage, q) => { if (q.id === 'dns') throw new Error('Cloudflare must not be called'); if (q.id === 'hostingerPlugins') { calls.cleanup = (calls.cleanup || 0) + 1; return { ok: true, detail: 'Removed 3 Hostinger plugin(s).' }; } calls.fix.push(q.id); if (hostFails) return { ok: false, detail: 'Hostinger said no' }; st[q.id] = 'ok'; return { ok: true, detail: 'done' }; },
+		fixReq: async (ctx, ch, stage, q) => { if (q.id === 'dns') throw new Error('Cloudflare must not be called'); if (q.id === 'hostingerPlugins') { calls.cleanup = (calls.cleanup || 0) + 1; return { ok: true, detail: 'Removed 3 Hostinger plugin(s).' }; } calls.fix.push(q.id); if (!hostFails && !sites.includes(ch.slug)) sites.push(ch.slug); if (hostFails) return { ok: false, detail: 'Hostinger said no' }; st[q.id] = 'ok'; return { ok: true, detail: 'done' }; },
 		applyOxygenLicense: async () => ({ state: 'ok', detail: 'Added the Oxygen licence key to the site.' }),
 		runWp: async (ctx, ch, args) => { wp.push(args); if (/option get cwai_portal_build/.test(args)) return optionResult; if (/portal-login/.test(args)) return loginResult; return /^help cwai portal-build/.test(args) ? { code: cwai ? 0 : 1, out: '', err: '' } : { code: 0, out: '', err: '' }; },
 		runWpBackground: async (ctx, ch, args) => { bg.push(args); return { code: 0, out: 'started', err: '' }; },
@@ -37,13 +37,13 @@ function rig({ ssh = null, cwai = false, hostFails = false, autoDelete = false, 
 	const clients = {
 		cfg: { previewDomain: 'churchwebglobal.com', templateSlug: 'build2' },
 		http: { get: async () => ({ status: 200, text: '<html><title>Grace United Church | Home</title><link href="https://static.cdn-website.com/x.css"></html>' }) },
-		hostinger: { available: () => true, websites: async () => [{ domain: 'grace-united-church.churchwebglobal.com' }], deleteWebsite: async (d) => { hostDeleted.push(d); } },
+		hostinger: { available: () => true, websites: async () => [...sites, ...(extra || [])].map((x) => ({ domain: x.includes('.') ? x : x + '.churchwebglobal.com' })), deleteWebsite: async (d) => { hostDeleted.push(d); } },
 		gateway: gw || { available: () => false },
 		...(ssh ? { ssh } : {}),
 	};
 	const exporter = { enqueue: async (b) => { calls.enqueue.push(b); return { id: 'job1' }; }, get: () => job };
 	const p = createProspects({ store, clients, exporter, dataDir: dir, notify: async (m) => { mail.push(m); }, secret: 'k', now: () => clock.t, autoDelete, alertTo: ['boss@x.ca'], baseUrl: 'https://portal.test', engine, log: () => {} });
-	return { p, engine, store, clock, mail, hostDeleted, bg, wp, st, job, calls, dir, golive, loginResult, optionResult };
+	return { sites, p, engine, store, clock, mail, hostDeleted, bg, wp, st, job, calls, dir, golive, loginResult, optionResult };
 }
 const make = async (r, o = {}) => { const c = await r.p.create({ url: 'https://www.graceunited.ca/', contactEmail: 'office@grace.ca', mode: 'preview', ...o }, 'staff@x.ca'); return c; };
 
@@ -197,7 +197,7 @@ test('30-day clean-up: warns once at 7 and 2 days, leaves live and kept sites al
 	r.clock.t += 2 * DAY; const out = await r.p.sweep(); assert.equal(out.overdue, 1); assert.deepEqual(r.hostDeleted, [], 'automatic deletion is off by default'); assert.ok(r.store.get(c.id));
 	r.p.extend(c.id, 7); assert.ok(r.store.get(c.id).prospect.expiresAt > r.clock.t + 6 * DAY && r.store.get(c.id).prospect.expiresAt <= r.clock.t + 7 * DAY + 1000); assert.equal(r.store.get(c.id).prospect.warned7, undefined);
 
-	const g = rig({ autoDelete: true }); const d = await make(g);
+	const g = rig({ autoDelete: true }); const d = await make(g); g.sites.push(d.slug);
 	g.store.update(d.id, (x) => { x.prospect.expiresAt = g.clock.t - DAY; });
 	const o2 = await g.p.sweep(); assert.equal(o2.deleted, 1); assert.deepEqual(g.hostDeleted, ['grace-united-church.churchwebglobal.com']); assert.equal(g.store.get(d.id), null);
 	const h = rig({ autoDelete: true }); const e = await make(h);
@@ -380,4 +380,16 @@ test('licence: the dashboard can apply the Oxygen licence to an existing site, a
 	r.engine.applyOxygenLicense = async () => ({ state: 'error', detail: 'The key was saved but Oxygen did not activate it (it says: invalid).' });
 	const bad = await r.p.licence(c.id); assert.equal(bad.state, 'error'); assert.match(bad.detail, /invalid/);
 	await assert.rejects(() => r.p.licence('nope'), /Not a prospect/);
+});
+
+test('guard: a name already used by a Hostinger site is never reused, and a site we did not create is never built over', async () => {
+	const r = rig({ extra: ['grace-united-church.churchwebglobal.com'] });
+	const c = await make(r); assert.equal(c.slug, 'grace-united-church-2', 'the taken address is skipped');
+	// the same thing if the site appears after the prospect was made: the first pass stops before changing anything
+	const r2 = rig(); const d = await make(r2);
+	r2.engine.testStage = async () => ({ site: { state: 'ok' }, oxygen: { state: 'no' } });
+	r2.engine.reqsFor = (s) => s.reqs;
+	r2.p.start(d.id); await r2.p.tick(d.id); r2.job.status = 'done'; await r2.p.tick(d.id); await r2.p.tick(d.id);
+	const v = r2.p.view(r2.store.get(d.id));
+	assert.equal(r2.calls.fix.length, 0, 'nothing was fixed or installed'); assert.equal(v.runState, 'failed'); assert.match(v.headline, /already exists/);
 });

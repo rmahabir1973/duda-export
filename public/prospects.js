@@ -90,7 +90,7 @@ function detail(c) {
 function row(c) {
 	const open = isOpen(c);
 	return `<tr class="${c.runState}${open ? ' open' : ''}" data-id="${c.id}">
-		<td class="c-name"><b>${esc(c.name)}</b><small>${esc(c.domain)}${c.platform ? ' · ' + esc(c.platform) : ''}</small>${c.contactEmail ? `<small>${esc(c.contactEmail)}</small>` : ''}</td>
+		<td class="c-name"><b>${esc(c.name)}</b><small>${esc(c.domain)}${c.platform ? ' · ' + esc(c.platform) : ''}</small>${c.contactEmail ? `<small>${esc(c.contactEmail)}</small>` : ''}${c.warning ? `<small class="bad">${esc(c.warning)}</small>` : ''}</td>
 		<td><span class="pill">${c.mode === 'full' ? 'FULL SITE' : 'PREVIEW'}</span></td>
 		<td class="c-status">${statusCell(c)}</td>
 		<td class="c-days">${daysCell(c)}</td>
