@@ -40,10 +40,9 @@ export function buildDnsPlan({ domain, hostingerIp, email = false, mailIp = '', 
 	if (email) {
 		if (mailIp) { want('A', mail, mailIp); replaceOld('A', mail, mailIp); }
 		for (const n of ['autodiscover', 'autoconfig']) { want('CNAME', `${n}.${d}`, mail); replaceOld('CNAME', `${n}.${d}`, mail); replaceOld('A', `${n}.${d}`, ''); }
-		// if their mail already goes to our server it must be copied now, or it stops the moment the nameservers change; otherwise it waits for the mailboxes
 		const mxHave = at(existing, 'MX', d).some((r) => lc(r.content) === mail), mxToday = at(src, 'MX', d).some((r) => lc(r.content) === mail);
-		lines.push({ type: 'MX', name: d, content: mail, priority: 10, proxy: false, action: mxHave ? 'keep' : mxToday ? 'copy' : 'later', note: mxHave || mxToday ? '' : 'Switched on once the mailboxes are ready, so no mail is lost.' });
-		for (const r of at(src, 'MX', d)) { mark(r); if (lc(r.content) !== mail) lines.push({ type: 'MX', name: d, content: r.content, priority: r.priority, proxy: false, action: 'copy', note: 'Kept until the email switch, then removed by a person.' }); }
+		lines.push({ type: 'MX', name: d, content: mail, priority: 10, proxy: false, action: mxHave ? 'keep' : mxToday ? 'copy' : 'create', note: '' });
+		for (const r of at(src, 'MX', d)) { mark(r); if (lc(r.content) !== mail) lines.push({ type: 'MX', name: d, content: r.content, priority: r.priority, proxy: false, action: existing.length ? 'keep' : 'copy', note: 'An old mail route. Remove it by hand once mail has moved to us.' }); }
 		// SPF: keep what else they send from, drop the old brand's include, add our mail server
 		const oldSpf = at(src, 'TXT', d).filter((r) => /^"?v=spf1/i.test(r.content));
 		const spf = mergeSpf(oldSpf.map((r) => r.content.replace(/^"|"$/g, '').split(/\s+/).filter((t) => !LEGACY.test(t)).join(' ')), { ip4: mailIp ? [mailIp] : [] });
@@ -56,7 +55,7 @@ export function buildDnsPlan({ domain, hostingerIp, email = false, mailIp = '', 
 		if (own) lines.push({ type: 'TXT', name: '_dmarc.' + d, content: own.content, proxy: false, action: existing.length ? 'keep' : 'copy', note: 'Their own DMARC policy is kept.' });
 		else lines.push({ type: 'TXT', name: '_dmarc.' + d, content: dmarc, proxy: false, action: at(existing, 'TXT', '_dmarc.' + d).some((r) => r.content.replace(/^"|"$/g, '') === dmarc) ? 'keep' : dm.length ? 'replace' : 'create', was: dm[0]?.content, id: dm[0]?.id, note: dm.length ? 'Replaces the old policy that mailed reports to the old brand\'s postmaster box.' : '' });
 		// DKIM: SmarterMail makes the key once the domain exists, so it can only be added then
-		lines.push({ type: 'TXT', name: `<selector>._domainkey.${d}`, content: 'The key SmarterMail generates for this domain', proxy: false, action: 'later', note: 'Copied here automatically once DKIM signing is switched on in SmarterMail.' });
+		lines.push({ type: 'TXT', name: `<selector>._domainkey.${d}`, content: 'The key SmarterMail generates for this domain', proxy: false, action: 'later', note: 'Added once SmarterMail has made the key (Email setup).' });
 	}
 	// everything else they have today is copied as it is (only while our zone is still empty)
 	if (!existing.length) for (const r of inventory) if (!handled.has(`${r.type}|${lc(r.name)}|${lc(r.content)}`)) lines.push({ type: r.type, name: r.name, content: r.content, priority: r.priority, proxy: false, action: 'copy' });

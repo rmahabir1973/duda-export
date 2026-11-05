@@ -43,7 +43,7 @@ test('plan: carlisleuc.ca today (email with us, old brand records) becomes the s
 test('plan: a new email customer gets the standard set, the MX waits for the mailboxes, and their own DMARC and other senders are kept', () => {
 	const lines = buildDnsPlan({ ...base, email: true, inventory: [{ type: 'MX', name: 'carlisleuc.ca', content: 'old.mail.example', priority: 5 }, { type: 'TXT', name: 'carlisleuc.ca', content: 'v=spf1 include:servers.mcsv.net ~all' }, { type: 'TXT', name: '_dmarc.carlisleuc.ca', content: 'v=DMARC1; p=none; rua=mailto:it@church.ca' }] });
 	const mx = find(lines, 'MX', 'carlisleuc.ca');
-	assert.equal(mx.find((l) => l.content === 'mail.carlisleuc.ca').action, 'later');
+	assert.equal(mx.find((l) => l.content === 'mail.carlisleuc.ca').action, 'create');
 	assert.equal(mx.find((l) => l.content === 'old.mail.example').action, 'copy', 'the old MX stays until the switch');
 	assert.equal(find(lines, 'TXT', 'carlisleuc.ca')[0].content, 'v=spf1 include:servers.mcsv.net ip4:212.28.180.63 ~all');
 	assert.equal(find(lines, 'TXT', '_dmarc.carlisleuc.ca')[0].content, 'v=DMARC1; p=none; rua=mailto:it@church.ca');
@@ -139,4 +139,19 @@ test('nameserver email: needs the Cloudflare nameservers first, asks for a DNS s
 	assert.equal(store.get('abc').customer.nsEmailAt, 5);
 	cu.save('abc', { domain: 'a.ca', dns: 'theirs', email: false }, 'ryan');
 	await assert.rejects(() => cu.setup('abc'), /manages its own/);
+});
+
+test('go-live and full site: run through the engine, remember the result, and mark the customer live when everything passes', async () => {
+	const started = [];
+	const store = createStore(fs.mkdtempSync(path.join(os.tmpdir(), 'cust-')));
+	const engine = { customerPlan: async () => ({}), customerGolive: async () => ({ live: true, items: [{ id: 'added', label: 'x', state: 'ok' }], results: { added: { state: 'ok' } } }) };
+	const cu = createCustomers({ store, ctxFor: () => ({ c: { cfg: { previewDomain: 'x.com' } } }), engine, startFull: (id) => started.push(id), pview: () => ({ mode: 'preview', canFull: true, cost: { total: { usd: 1.5 } } }), now: () => 7 });
+	store.create({ name: 'A Church', slug: 'abc', domain: 'a.ca' }); store.update('abc', (c) => { c.prospect = { domain: 'a.ca', createdAt: 1 }; c.run = { state: 'running' }; });
+	store.update('abc', (c) => { c.run = { state: 'done' }; });
+	cu.convert('abc', { domain: 'a.ca', dns: 'ours' }, 'ryan');
+	await cu.full('abc', 'ryan'); assert.deepEqual(started, ['abc']);
+	const r = await cu.golive('abc', 'chad'); assert.equal(r.live, true);
+	const c = store.get('abc'); assert.equal(c.stages.golive.done, true);
+	const v = cu.view(c); assert.equal(v.live, true); assert.equal(v.cost.total.usd, 1.5); assert.ok(v.history.some((h) => /Live on a\.ca/.test(h.text)));
+	assert.throws(() => cu.revert('abc'), /live/);
 });

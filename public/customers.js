@@ -10,7 +10,7 @@ const api = async (path, opts = {}) => {
 };
 const fmtDate = (t) => t ? new Date(t).toLocaleDateString('en-CA', { year: 'numeric', month: 'short', day: 'numeric' }) : '';
 let rows = [], open = new Set(), plans = {}, confirmBack = null, tests = {}, drafts = {}, busy = {}, notes = {};
-const ACTION = { create: ['Add', 'ok'], keep: ['Already there', 'muted'], copy: ['Copy over', 'info'], replace: ['Replaces old', 'warn'], later: ['Switch on later', 'info'] };
+const ACTION = { create: ['Add', 'ok'], keep: ['Already there', 'muted'], copy: ['Copy over', 'info'], replace: ['Replaces old', 'warn'], later: ['Added later', 'info'] };
 
 function planHtml(id) {
 	const p = plans[id];
@@ -36,8 +36,8 @@ function settingsHtml(c) {
 		<p class="err" data-err="${c.id}"></p></div>`;
 }
 const STATE = { ok: ['OK', 'ok'], no: ['Not yet', 'warn'], info: ['Info', 'muted'] };
-function actionsHtml(c) {
-	if (c.dns !== 'ours') return '<h4>Go live</h4><div class="hint">The church manages its own DNS. Emailing them the records is coming next.</div>';
+function dnsActionsHtml(c) {
+	if (c.dns !== 'ours') return '<h4>DNS</h4><div class="hint">The church manages its own DNS. Emailing them the records is coming next.</div>';
 	const d = drafts[c.id], t = tests[c.id], n = notes[c.id], b = busy[c.id];
 	const setup = `<div class="btns"><button class="sm primary" data-setup="${c.id}" ${b ? 'disabled' : ''}>${b === 'setup' ? 'Setting up…' : c.dnsSetupAt ? 'Run DNS setup again' : 'Set up DNS in Cloudflare'}</button>
 		<button class="sm" data-draft="${c.id}" ${b ? 'disabled' : ''}>Nameserver email…</button> <button class="sm" data-test="${c.id}" ${b ? 'disabled' : ''}>${b === 'test' ? 'Testing…' : 'Test'}</button></div>`;
@@ -47,7 +47,7 @@ function actionsHtml(c) {
 		<label>Message <textarea data-m="body" rows="16">${esc(d.body)}</textarea></label><div class="btns"><button class="sm primary" data-sendns="${c.id}" ${b ? 'disabled' : ''}>${b === 'send' ? 'Sending…' : 'Send from ' + esc(d.from)}</button> <button class="sm" data-closens="${c.id}">Close</button></div></div>` : '';
 	const res = t ? `<table class="pr-table cu-plan"><tbody>${t.checks.map((k) => { const [w, cls] = STATE[k.state] || [k.state, '']; return `<tr class="${cls}"><td><span class="chip ${cls}">${w}</span></td><td>${esc(k.label)}</td><td><small>${esc(k.detail)}</small></td></tr>`; }).join('')}</tbody></table>
 		<div class="hint">${t.ok ? 'Everything checked is in place.' : 'Some checks are not in place yet. That is normal until the church has switched its nameservers.'}</div>` : '';
-	return `<h4>Go live</h4><div class="hint">Setting up DNS only adds records in our Cloudflare. Nothing changes for the church until they switch their nameservers.</div>${setup}${note}${sent}${form}${res}`;
+	return `<h4>DNS</h4><div class="hint">Setting up DNS only adds records in our Cloudflare. Nothing changes for the church until they switch their nameservers.</div>${setup}${note}${sent}${form}${res}`;
 }
 function row(c) {
 	const isOpen = open.has(c.id);
@@ -62,6 +62,30 @@ function render() {
 }
 async function loadPlan(id) { plans[id] = null; render(); try { plans[id] = await api(`/api/customers/${id}/plan`); } catch (e) { plans[id] = { error: e.message }; } render(); }
 const readForm = (id) => { const box = document.querySelector(`.cu-set[data-for="${id}"]`), g = (f) => box.querySelector(`[data-f="${f}"]`); return { domain: g('domain').value, dns: (box.querySelector('[data-f="dns"]:checked') || {}).value || '', email: g('email').checked, contactEmail: g('contactEmail').value }; };
+const usd = (n) => '$' + (n || 0).toFixed(2);
+function costHtml(c) {
+	const k = c.cost; if (!k) return '';
+	const parts = [k.preview && k.preview.usd != null ? `preview ${usd(k.preview.usd)}` : '', k.full && k.full.usd != null ? `full site ${usd(k.full.usd)}` : ''].filter(Boolean);
+	const total = k.total ? `${usd(k.total.usd)} in total` : parts.length ? '' : (k.tracked ? 'not measured yet' : 'not tracked');
+	return `<div class="hint"><b>AI cost for this church:</b> ${[total, parts.length ? '(' + parts.join(', ') + ')' : ''].filter(Boolean).join(' ')}. DNS, email and go-live use no AI; this is everything the church\'s site has spent through the gateway since its preview began.</div>`;
+}
+function siteHtml(c) {
+	const b = busy[c.id], g = c.goliveItems;
+	const full = c.mode === 'full' ? `<div class="hint">Full site: ${esc(c.runState === 'done' ? 'built' : c.headline || c.runState)}.</div>` : c.canFull ? `<button class="sm" data-fullsite="${c.id}" ${b ? 'disabled' : ''}>Build full site</button>` : `<div class="hint">${esc(c.headline || 'Preview')}</div>`;
+	const live = c.live ? `<div class="hint ok">Live on ${esc(c.domain)}.</div>` : '';
+	const res = g ? `<table class="pr-table cu-plan"><tbody>${g.map((k) => { const [w, cls] = STATE[k.state] || (k.state === 'blocked' ? ['Waiting', 'muted'] : k.state === 'error' ? ['Error', 'warn'] : [k.state, '']); return `<tr class="${cls}"><td><span class="chip ${cls}">${w}</span></td><td>${esc(k.label)}</td><td><small>${esc(k.detail || '')}</small></td></tr>`; }).join('')}</tbody></table>` : '';
+	return `<h4>Site</h4>${costHtml(c)}<div class="btns">${full} <button class="sm primary" data-golive="${c.id}" ${b || c.runState !== 'done' ? 'disabled' : ''}>${b === 'golive' ? 'Working…' : c.live ? 'Check the live site again' : 'Move preview to the live domain'}</button></div>${live}
+		<div class="hint">Moving to the live domain needs the domain to point at our hosting (DNS set up and, for "We manage", nameservers switched). Hostinger takes a few minutes for the certificate: press the button again until every line is green.</div>${res}`;
+}
+function emailHtml(c) {
+	const e = c.emailSetup || {}, names = { create: 'Mailboxes', postmark: 'Postmark', health: 'Check', send: 'Test email', test: 'Test email' };
+	const rows = Object.entries(e).map(([k, h]) => `<tr><td>${esc(names[k] || k)}</td><td><small>${new Date(h.at).toLocaleString('en-CA')}${h.by ? ' · ' + esc(h.by) : ''}</small></td><td>${h.items.map((i) => `<span class="chip ${i.state === 'ok' ? 'ok' : ['no', 'error'].includes(i.state) ? 'warn' : 'muted'}">${esc(i.label)}</span>`).join(' ')}</td></tr>`).join('');
+	return c.email ? `<h4>Email</h4><div class="btns"><a class="btn sm primary" href="/email?domain=${encodeURIComponent(c.domain)}">Open Email setup</a></div>${rows ? `<table class="pr-table cu-plan"><tbody>${rows}</tbody></table>` : '<div class="hint">No email setup has been run for this domain yet.</div>'}` : '';
+}
+function historyHtml(c) {
+	return `<details class="cu-hist"><summary>History (${c.history.length})</summary><ul>${c.history.map((h) => `<li><small>${new Date(h.at).toLocaleString('en-CA')}${h.by ? ' · ' + esc(h.by) : ''}</small> ${esc(h.text)}</li>`).join('')}</ul></details>`;
+}
+const actionsHtml = (c) => dnsActionsHtml(c) + siteHtml(c) + emailHtml(c) + historyHtml(c);
 const readMail = (id) => { const box = document.querySelector(`.cu-set[data-for="${id}"]`).closest('td'), g = (f) => box.querySelector(`[data-m="${f}"]`).value; return { to: g('to'), subject: g('subject'), body: g('body') }; };
 async function act(id, kind, fn) {
 	busy[id] = kind; notes[id] = null; render();
@@ -69,13 +93,15 @@ async function act(id, kind, fn) {
 	busy[id] = null; render();
 }
 document.addEventListener('click', async (e) => {
-	const t = e.target.closest('[data-open],[data-save],[data-back],[data-back2],[data-backno],[data-setup],[data-draft],[data-test],[data-sendns],[data-closens]'); if (!t) return;
+	const t = e.target.closest('[data-open],[data-save],[data-back],[data-back2],[data-backno],[data-setup],[data-fullsite],[data-golive],[data-draft],[data-test],[data-sendns],[data-closens]'); if (!t) return;
 	const d = t.dataset;
 	if (d.setup) return act(d.setup, 'setup', async () => {
 		const r = await api(`/api/customers/${d.setup}/dns/setup`, { method: 'POST', body: '{}' });
 		notes[d.setup] = { bad: r.errors.length > 0, html: `${r.created ? 'Added the domain to Cloudflare. ' : ''}${r.done.length} records written${r.errors.length ? `, ${r.errors.length} failed: ${r.errors.map(esc).join('; ')}` : ''}.${r.flagged.length ? ' Needs a person: ' + r.flagged.map(esc).join('; ') : ''}${r.nameservers.length ? ' Nameservers: <code>' + r.nameservers.map(esc).join('</code> and <code>') + '</code>' : ''}` };
 		await load(); loadPlan(d.setup);
 	});
+	if (d.fullsite) return act(d.fullsite, 'full', async () => { await api(`/api/customers/${d.fullsite}/full`, { method: 'POST', body: '{}' }); notes[d.fullsite] = { html: 'The full site build has started. Follow it on the Prospects page.' }; await load(); });
+	if (d.golive) return act(d.golive, 'golive', async () => { await api(`/api/customers/${d.golive}/golive`, { method: 'POST', body: '{}' }); await load(); });
 	if (d.draft) return act(d.draft, 'draft', async () => { drafts[d.draft] = await api(`/api/customers/${d.draft}/ns-email`); });
 	if (d.closens) { drafts[d.closens] = null; return render(); }
 	if (d.sendns) return act(d.sendns, 'send', async () => {

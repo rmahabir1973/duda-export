@@ -351,7 +351,11 @@ const deployStore = createStore(path.join(DATA_DIR, 'deploy'), { db: portalDb })
 const boardInit = await deployStore.init();
 console.log(`customer board: ${boardInit.count} customers loaded (${boardInit.source})`);
 app.use('/api/deploy', createDeployRouter({ need, store: deployStore, clients: deployClients }));
-app.use('/api/email', createEmailRouter({ need, clients: deployClients }));
+const churchByDomain = (d) => deployStore.list().find((c) => c.domain === d && (c.customer || c.prospect));
+const STEP = { create: 'Mailboxes', postmark: 'Postmark', health: 'Check', send: 'Test email', test: 'Test email' };
+app.use('/api/email', createEmailRouter({ need, clients: deployClients,
+	history: (d) => churchByDomain(d)?.emailSetup || {},
+	record: (d, step, items, by) => { const c = churchByDomain(d); if (!c) return; deployStore.update(c.id, (x) => { (x.emailSetup ||= {})[step] = { at: Date.now(), by, items: items.map((i) => ({ label: i.label, state: i.state, detail: String(i.detail || '').slice(0, 400) })) }; }); deployStore.log(c.id, by, `Email setup: ${STEP[step] || step} run (${items.filter((i) => i.state === 'ok').length} ok, ${items.filter((i) => ['no', 'error'].includes(i.state)).length} problems)`); } }));
 // Prospects: the one-flow screen. The export comes from the exporter above; the site steps are the same ones as the old Customers checklist.
 const lines = (v) => String(v || '').split(/[\s,;]+/).map((x) => x.trim()).filter((x) => /@/.test(x));
 const prospects = createProspects({
@@ -369,7 +373,7 @@ const prospects = createProspects({
 app.use('/api/prospects', prospects.router({ need }));
 app.use('/api/build', prospects.buildRouter());
 const supportFrom = (env.SUPPORT_FROM || 'support@churchwebglobal.com').trim();
-const customers = createCustomers({ store: deployStore, ctxFor: prospects.ctxFor, engine: deployEngine, from: supportFrom, send: deployClients.cfg.postmarkServerToken ? (m) => deployClients.postmark.sendEmail(m) : null });
+const customers = createCustomers({ store: deployStore, ctxFor: prospects.ctxFor, engine: deployEngine, pview: (c) => prospects.view(c), refreshCost: (id) => prospects.costTotalRefresh(id), startFull: (id) => { prospects.switchToFull(id); prospects.tick(id); }, from: supportFrom, send: deployClients.cfg.postmarkServerToken ? (m) => deployClients.postmark.sendEmail(m) : null });
 app.use('/api/customers', customers.router({ need }));
 if (String(env.PROSPECTS_RUN || 'on').toLowerCase() !== 'off') prospects.startTimers();
 const hosted = portal && portalDb ? createHosted({ db: portalDb, clients: deployClients, duda: makeDudaMcp({ token: (env.DUDA_MCP_TOKEN || '').trim() }), dir: portal.dir, ownDomains: (env.OWN_DOMAINS || 'churchwebglobal.com,churchwebsupport.com').split(',').map((x) => x.trim()).filter(Boolean), previewDomain: deployClients.cfg.previewDomain }) : null;
