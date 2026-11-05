@@ -50,6 +50,20 @@ export function makeSmarterMail(cfg, { fetch: f = globalThis.fetch } = {}) {
 			}
 			return { ok: false, error: 'SmarterMail did not return a domain list (' + tried.join('; ') + ')' };
 		},
+		/** Mailboxes on a domain. SmarterMail versions differ in the call, so try the known shapes and say what was tried. */
+		async users(token, domain) {
+			const tried = [], re = /^[^@\s]+$/;
+			const shapes = [['POST', 'api/v1/settings/sysadmin/domain-users', { domain }], ['GET', `api/v1/settings/sysadmin/domain-users?domain=${encodeURIComponent(domain)}`], ['POST', 'api/v1/settings/domain/users', { domain }], ['GET', `api/v1/settings/domain/users?domain=${encodeURIComponent(domain)}`], ['POST', 'api/v1/settings/domain/user-list', { domain }], ['GET', `api/v1/settings/sysadmin/domain-settings/${encodeURIComponent(domain)}/users`]];
+			for (const [method, path, body] of shapes) {
+				const r = await call(path, { token, method, body });
+				tried.push(`${method} ${path.split('?')[0].split('/').slice(-2).join('/')}: ${r.status || r.error}`);
+				if (!r.ok) continue;
+				const names = new Set(), walk = (v, d = 0) => { if (d > 5 || !v) return; if (Array.isArray(v)) return v.forEach((x) => walk(x, d + 1)); if (typeof v === 'object') { for (const k of ['userName', 'username', 'emailAddress', 'email']) if (typeof v[k] === 'string') { const n = v[k].toLowerCase().split('@')[0]; if (re.test(n)) names.add(n); } for (const x of Object.values(v)) if (x && typeof x === 'object') walk(x, d + 1); } };
+				walk(r.data);
+				if (names.size) return { ok: true, users: [...names].sort(), via: path.split('?')[0] };
+			}
+			return { ok: false, error: 'SmarterMail did not return a mailbox list (' + tried.join('; ') + ')' };
+		},
 		/** Sets an existing user's password. The caller must check it worked (sign in with the new password): SmarterMail versions differ in what they accept. */
 		async setPassword(token, { domain, userName, password }) {
 			let last = '';

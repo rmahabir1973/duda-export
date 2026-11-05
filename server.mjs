@@ -352,7 +352,7 @@ const boardInit = await deployStore.init();
 console.log(`customer board: ${boardInit.count} customers loaded (${boardInit.source})`);
 app.use('/api/deploy', createDeployRouter({ need, store: deployStore, clients: deployClients }));
 const churchByDomain = (d) => deployStore.list().find((c) => c.domain === d && (c.customer || c.prospect));
-const STEP = { create: 'Mailboxes', postmark: 'Postmark', health: 'Check', send: 'Test email', test: 'Test email' };
+const STEP = { mailboxes: 'Mailbox list', create: 'Mailboxes', postmark: 'Postmark', health: 'Check', send: 'Test email', test: 'Test email' };
 app.use('/api/email', createEmailRouter({ need, clients: deployClients,
 	history: (d) => churchByDomain(d)?.emailSetup || {},
 	record: (d, step, items, by) => { const c = churchByDomain(d); if (!c) return; deployStore.update(c.id, (x) => { (x.emailSetup ||= {})[step] = { at: Date.now(), by, items: items.map((i) => ({ label: i.label, state: i.state, detail: String(i.detail || '').slice(0, 400) })) }; }); deployStore.log(c.id, by, `Email setup: ${STEP[step] || step} run (${items.filter((i) => i.state === 'ok').length} ok, ${items.filter((i) => ['no', 'error'].includes(i.state)).length} problems)`); } }));

@@ -234,6 +234,14 @@ test('SmarterMail domain list: tries the known calls and reads the names from wh
 	assert.equal(none.ok, false); assert.match(none.error, /did not return a domain list/);
 });
 
+test('SmarterMail mailbox list: tries the known calls, reads user names from whichever shape comes back, and says what it tried when none work', async () => {
+	const f = async (url, o) => { const ok = url.includes('domain/users') && o.method === 'POST'; return { ok, status: ok ? 200 : 404, text: async () => JSON.stringify(ok ? { users: [{ userName: 'Office@a.ca' }, { userName: 'pastor' }] } : {}) }; };
+	const sm = makeSmarterMail({ smartermailUrl: 'https://mail.x', smartermailUser: 'u', smartermailPassword: 'p' }, { fetch: f });
+	assert.deepEqual((await sm.users('t', 'a.ca')).users, ['office', 'pastor']);
+	const none = await makeSmarterMail({ smartermailUrl: 'https://mail.x' }, { fetch: async () => ({ ok: false, status: 404, text: async () => '{}' }) }).users('t', 'a.ca');
+	assert.equal(none.ok, false); assert.match(none.error, /did not return a mailbox list/);
+});
+
 test('assistant: a history containing thinking blocks or an orphaned tool call is repaired instead of rejected', async () => {
 	const { a, f } = await mk([[{ type: 'text', text: 'Fine.' }]]);
 	const history = [

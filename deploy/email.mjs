@@ -57,6 +57,18 @@ export async function createMailboxes(ctx, input, { dry = false } = {}) {
 	return out;
 }
 
+/** What is actually on the mail server for this domain right now. Read-only. */
+export async function listMailboxes(ctx, domain) {
+	const sm = ctx.c.smartermail;
+	if (!sm.available()) return [item('sm', 'SmarterMail isn\'t connected to this server', 'no', 'Set SMARTERMAIL_URL, SMARTERMAIL_ADMIN_USER and SMARTERMAIL_ADMIN_PASSWORD in Railway.')];
+	let sys; try { sys = await sm.sysLogin(); } catch (e) { return [item('login', 'Couldn\'t sign in to SmarterMail', 'error', e.message)]; }
+	const doms = await sm.domains(sys);
+	if (doms.ok && !doms.domains.includes(domain)) return [item('domain', `${domain} is not on the mail server`, 'no', 'Create the domain and mailboxes first (step 1).')];
+	const r = await sm.users(sys, domain);
+	if (!r.ok) return [item('domain', `${domain} is on the mail server`, doms.ok ? 'ok' : 'info', ''), item('users', 'Couldn\'t read the mailbox list', 'warn', r.error)];
+	return [item('domain', `${domain} is on the mail server`, 'ok', ''), ...r.users.map((u) => item('box:' + u, `${u}@${domain}`, 'ok', 'Exists on the mail server.'))];
+}
+
 /** Step 2: Postmark for outbound mail: the domain at Postmark, its DNS records, SPF + DMARC, and verification. */
 export async function enablePostmark(ctx, domain, { dry = false } = {}) {
 	const stage = STAGES.find((s) => s.key === 'sending');
