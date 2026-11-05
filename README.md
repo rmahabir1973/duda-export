@@ -273,3 +273,4 @@ Portal callback endpoints (no sign-in, signed token per church): `/api/build/:id
 - The old checklist screen (/deploy) is retired: it redirects to Prospects, and the Details toggle is gone; every church always shows its stages.
 - Preview sites never touch DNS: *.churchwebglobal.com resolves through the wildcard, so the Create site step skips the DNS check and Cloudflare is not called. DNS is for go-live only.
 - The Hostinger plugins are now removed as the last step, after the build (it never holds up the run; if it fails it's noted under the church's details).
+- The sign-in gate for /api no longer covers /api/build/*: the sites' plugin calls those with a signed per-church token (it was being refused with 401 "Not signed in", so the build could neither download its package nor report back).

@@ -236,3 +236,16 @@ test('directory API: signed-in only, CSV import and export through the real rout
 		const acts = (await t.portal.audit.list({ limit: 50 })).rows.map((x) => x.action); assert.ok(acts.includes('directory.import') && acts.includes('directory.outreach'));
 	} finally { t.close(); }
 });
+
+test('the signed /api/build/* endpoints the church sites call are not behind the sign-in, everything else under /api still is', async () => {
+	const db = await fresh();
+	const portal = await createPortal({ db, bootstrapPassword: PW, encryptionKey: KEY, hooks: {} });
+	const app = express(); app.use(express.json()); app.use(portal.attach); portal.mount(app);
+	app.use('/api/build', (req, res) => res.json({ reached: true }));
+	const srv = app.listen(0), base = `http://127.0.0.1:${srv.address().port}`;
+	try {
+		assert.equal((await fetch(base + '/api/build/x/state')).status, 200);
+		assert.equal((await fetch(base + '/api/prospects')).status, 401);
+		assert.equal((await fetch(base + '/api/buildx')).status, 401, 'only /api/build/ itself is open');
+	} finally { srv.close(); }
+});
