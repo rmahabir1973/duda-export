@@ -52,7 +52,7 @@ function detail(c) {
 		<div class="status ${cur.state}"><span>${esc(c.headline)}</span></div>${bar}${q}${blocked}
 		<div class="pr-det">
 			<div class="hint">Staff login on the preview: <code>churchweb</code> with the standard staff password. ${me?.user?.role === 'admin' && c.previewUrl ? `<a href="#" data-adm="${c.id}">Show admin login</a>` : ''}</div>${adm}
-			${c.notes ? `<div class="hint"><b>Notes:</b> ${esc(c.notes)}</div>` : ''}${docs}
+			${c.tidy && c.tidy.state !== 'done' ? `<div class="hint">Hostinger plugins: ${esc(c.tidy.message)}</div>` : ''}${c.notes ? `<div class="hint"><b>Notes:</b> ${esc(c.notes)}</div>` : ''}${docs}
 			<div class="hint">${c.exported ? `Export: ${c.exported.pages ?? '?'} pages, ${c.exported.images ?? '?'} images. ` : ''}${c.zipReady ? `<a href="/api/prospects/${c.id}/package">Download the ZIP</a>` : ''}</div>
 		</div>`;
 }
