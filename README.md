@@ -302,3 +302,6 @@ Portal callback endpoints (no sign-in, signed token per church): `/api/build/:id
 - DNS plan lists every other record already in the zone (old Namecheap forwarding MX, stray records) with a **Remove** button (confirmed). The website and standard mail records can't be removed from here.
 - Email setup has a customer picker, fills the domain and mailbox names, and shows what has been done.
 - A web address pasted as the church name is replaced by the name found on the site (cleaner Hostinger site names).
+
+## v10.4
+- Email setup: **Show mailboxes on the server** reads the real mailbox list from SmarterMail (best effort: it tries the known API calls and, if none work, shows which it tried). The result is kept on the customer and shown in its Email section. Setup run before v10.2 was never recorded, which is why nothing showed.

@@ -51,7 +51,7 @@ function dnsActionsHtml(c) {
 }
 function emailCell(c) {
 	if (!c.email) return 'Not with us';
-	const e = c.emailSetup || {}, ok = (k) => e[k] && e[k].items.length && e[k].items.every((i) => ['ok', 'info'].includes(i.state));
+	const e = c.emailSetup || {}, ok = (k) => (k === 'create' && e.mailboxes && e.mailboxes.items.some((i) => i.state === 'ok')) || e[k] && e[k].items.length && e[k].items.every((i) => ['ok', 'info'].includes(i.state));
 	const steps = [['create', 'Mailboxes'], ['postmark', 'Postmark'], ['health', 'Checked']];
 	return `With us<small>${steps.map(([k, w]) => `${ok(k) ? '✓' : '·'} ${w}`).join('  ')}</small>`;
 }

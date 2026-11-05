@@ -18,6 +18,7 @@ async function go(btn, out, path, body, confirmText) {
 	btn.disabled = false; btn.textContent = old;
 }
 const create = (dry) => ({ domain: $('domain').value, addresses: $('boxes').value, password: $('pw').value, dry, confirm: !dry });
+$('bList').onclick = (e) => go(e.target, $('rCreate'), '/mailboxes', { domain: $('domain').value });
 $('bPrev').onclick = (e) => go(e.target, $('rCreate'), '/create', create(true));
 $('bCreate').onclick = (e) => go(e.target, $('rCreate'), '/create', create(false), `Create ${$('domain').value} and its mailboxes on the live mail server?`);
 $('pPrev').onclick = (e) => go(e.target, $('rPm'), '/postmark', { domain: $('domain').value, dry: true });
@@ -26,14 +27,14 @@ $('hRun').onclick = (e) => go(e.target, $('rHealth'), '/health', { domain: $('do
 $('tRun').onclick = (e) => go(e.target, $('rTest'), '/test', { domain: $('domain').value, to: $('to').value, confirm: true }, `Send a test email from test@${$('domain').value} to ${$('to').value}?`);
 
 // Come back to where you were: the fields are remembered (never the password), and the server keeps the last result of each step even if you left while it was running.
-const SECT = { create: 'rCreate', postmark: 'rPm', health: 'rHealth', send: 'rTest', test: 'rTest' };
+const SECT = { mailboxes: 'rCreate', create: 'rCreate', postmark: 'rPm', health: 'rHealth', send: 'rTest', test: 'rTest' };
 const saveFields = () => { try { localStorage.setItem('emailSetup', JSON.stringify({ domain: $('domain').value, boxes: $('boxes').value, to: $('to').value })); } catch { /* optional */ } };
 ['domain', 'boxes', 'to'].forEach((id) => $(id).addEventListener('input', saveFields));
 let poll = null;
 async function restore() {
 	const d = $('domain').value.trim(); if (!d) return;
 	let j; try { const r = await fetch('/api/email/state?domain=' + encodeURIComponent(d), { headers: H }); j = await r.json(); } catch { return; }
-	const made = ((j.history || {}).create?.items || []).map((i) => i.label).filter((l) => /^[^@\s]+@[^@\s]+$/.test(l)).map((l) => l.split('@')[0]);
+	const made = (((j.history || {}).mailboxes || (j.history || {}).create)?.items || []).map((i) => i.label).filter((l) => /^[^@\s]+@[^@\s]+$/.test(l)).map((l) => l.split('@')[0]);
 	if (made.length && !$('boxes').value.trim()) $('boxes').value = made.join('\n');
 	for (const [step, h] of Object.entries(j.history || {})) { const el = $(SECT[step]); if (!el) continue; show(el, h.items); el.insertAdjacentHTML('afterbegin', `<li class="info"><span class="ic">Last run</span><div>${new Date(h.at).toLocaleString()}${h.by ? ' by ' + esc(h.by) : ''}</div></li>`); }
 	clearTimeout(poll);
