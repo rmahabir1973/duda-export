@@ -308,3 +308,5 @@ Portal callback endpoints (no sign-in, signed token per church): `/api/build/:id
 - The build stops before changing anything if a site already sits at the preview address and this prospect did not create it (this is what overwrote a live WordPress site).
 - Go-live refuses to attach a domain that is already its own site on Hostinger.
 - The Prospects row warns when the church is already WordPress or already on our hosting.
+## v10.4
+- Email setup: **Show mailboxes on the server** reads the real mailbox list from SmarterMail (best effort: it tries the known API calls and, if none work, shows which it tried). The result is kept on the customer and shown in its Email section. Setup run before v10.2 was never recorded, which is why nothing showed.
