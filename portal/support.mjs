@@ -30,7 +30,7 @@ Answer with ONE JSON object and nothing else:
  "asks_for_human": true if the sender asks to speak to a person,
  "reply": a short, kind reply to the sender ONLY if the knowledge below fully answers the question, otherwise "",
  "kb_basis": the exact line(s) of the knowledge you used, or ""}
-Rules for "reply": use only the knowledge below, never invent facts, prices, dates or policies, never promise refunds, credits or timelines, never mention other customers, keep it under 150 words, plain words, start with "Hi <first name>," and do not sign it. If the sender is not a registered client, only reply to a sales question.
+Rules for "reply": use only the knowledge below and the facts in <account> (what our systems know about this sender's own account: their services, invoices, domain, website and email with us), never invent facts, prices, dates or policies, never promise refunds, credits or timelines, never mention other customers, keep it under 150 words, plain words, start with "Hi <first name>," and do not sign it. If the sender is not a registered client, only reply to a sales question. When <account> answers a factual question (an invoice amount or due date, when a domain renews, where email or the website is hosted, what plan they have), you may answer it and put "account" in kb_basis. Requests to change anything (passwords, contacts, billing details, DNS, content, cancellations) still need a person: set needs_human true and say what to do in "reason". Use <account> to make "reason" specific, so the person has the facts in front of them.
 Category hints: "registrar_notice" is automated mail from a domain registrar such as Ascio about domains. "spam" is unsolicited advertising, SEO or link offers, phishing and anything unrelated to our services.
 <knowledge>
 ${String(kb || '').slice(0, 20000)}
@@ -57,18 +57,18 @@ export function decide(t, row) {
 	if (t.category === 'spam') return t.confidence >= 0.9 && !isClient ? { action: 'close_spam', priority: 4 } : { action: 'escalate', reason: isClient ? 'Looks like spam but it is from a registered client, so a person should check.' : 'Possible spam, but the AI was not sure.' };
 	if (t.category === 'registrar_notice') return t.has_deadline ? { action: 'escalate', priority: Math.min(t.priority, 2), reason: 'Registrar notice with a deadline or required action.' } : t.confidence >= 0.8 ? { action: 'digest', priority: 4 } : { action: 'escalate', reason: 'Probably a registrar notice, but the AI was not sure it can be skipped.' };
 	if (t.category === 'thanks') return isClient && t.confidence >= 0.9 && !t.asks_for_human && t.sentiment !== 'negative' ? { action: 'close_thanks', priority: 4 } : { action: 'queue' };
-	if (t.category === 'billing') return { action: 'escalate', reason: t.reason || 'Billing questions always go to a person.' };
+	if (t.category === 'billing' && !(t.reply && /account/i.test(t.kb_basis) && t.confidence >= 0.9 && !t.needs_human && isClient)) return { action: 'escalate', reason: t.reason || 'Billing questions go to a person unless the answer is a plain fact from the account.' };
 	if (t.sentiment === 'negative') return { action: 'escalate', reason: 'The sender sounds unhappy.' };
 	if (t.asks_for_human) return { action: 'escalate', reason: 'The sender asked for a person.' };
 	if (t.needs_human) return { action: 'escalate', reason: t.reason || 'The AI says a person should handle this.' };
 	if (t.priority === 1) return { action: 'escalate', reason: 'Urgent.' };
-	const grounded = t.reply && t.kb_basis && t.confidence >= 0.85 && AUTO_REPLY_OK.has(t.category) && !noreply && (isClient || t.category === 'sales');
+	const grounded = t.reply && t.kb_basis && t.confidence >= 0.85 && (AUTO_REPLY_OK.has(t.category) || (t.category === 'billing' && /account/i.test(t.kb_basis))) && !noreply && (isClient || t.category === 'sales');
 	return grounded ? { action: 'reply' } : { action: 'escalate', reason: 'Not covered by the support knowledge, so a person should answer.' };
 }
 
-export function createSupport({ db, reader, writer = null, ai, mail = null, env = {}, now = () => Date.now(), log = console.log }) {
+export function createSupport({ db, reader, writer = null, ai, mail = null, env = {}, context = null, now = () => Date.now(), log = console.log }) {
 	let running = false;
-	const kvGet = async (key) => { const r = (await db.query('select value from kv where key = $1', [key]))[0]; return r ? (typeof r.value === 'string' ? JSON.parse(r.value) : r.value) : null; };
+	const kvGet = async (key) => { const r = (await db.query('select value from kv where key = $1', [key]))[0]; return r ? ((typeof r.value === 'string' && /^[\[{"]/.test(r.value) ? JSON.parse(r.value) : r.value)) : null; };
 	const kvPut = (key, val) => db.query('insert into kv (key, value) values ($1, $2) on conflict (key) do update set value = excluded.value, updated_at = now()', [key, JSON.stringify(val)]);
 	const note = (id, action, who = '', detail = '') => db.query('insert into support_log (ticket_id, action, who, detail) values ($1, $2, $3, $4)', [id, action, who, clip(detail, 500)]);
 	const canWrite = () => !!(writer && writer.available() && env.SUPPORT_ADMIN_USERNAME);
@@ -120,7 +120,8 @@ export function createSupport({ db, reader, writer = null, ai, mail = null, env 
 		/** Asks the AI to label one ticket, then lets the rules decide what to do with it. The result is stored. */
 		async triage(row, cfg) {
 			const safe = (v) => String(v ?? '').replace(/<\/?\s*ticket\s*>/gi, '[tag]'), line = (v) => clip(v, 150).replace(/[\r\n<>]+/g, ' ');
-			const body = `Ticket #${line(row.tid || row.id)}\nFrom: ${line(row.sender_name)} <${line(row.sender)}> (${Number(row.client_id) > 0 ? 'a registered client' : 'NOT a registered client'})\nMessages in this ticket: ${Number(row.messages) || 1}\n<ticket>\nSubject: ${safe(row.subject)}\n${safe(row.excerpt)}\n</ticket>`;
+			let account = ''; if (context) { try { account = clip(await context(row), 6000); } catch (e) { log('support: account context failed:', e.message); } }
+			const body = `Ticket #${line(row.tid || row.id)}\nFrom: ${line(row.sender_name)} <${line(row.sender)}> (${Number(row.client_id) > 0 ? 'a registered client' : 'NOT a registered client'})\nMessages in this ticket: ${Number(row.messages) || 1}\n<account>\n${account ? safe(account).replace(/<\/?\s*account\s*>/gi, '[tag]') : 'Nothing is known about this sender in our systems.'}\n</account>\n<ticket>\nSubject: ${safe(row.subject)}\n${safe(row.excerpt)}\n</ticket>`;
 			let t; try { t = parseTriage(await ai.complete(SYSTEM(cfg.kb), body, { maxTokens: 900 })); } catch (e) { await set(row.id, { error: clip(e.message, 300) }); throw e; }
 			const d = decide(t, row);
 			await set(row.id, { category: t.category, priority: d.action === 'escalate' && d.priority ? d.priority : d.action === 'digest' || d.action === 'close_spam' || d.action === 'close_thanks' ? 4 : t.priority, summary: t.summary, needs_human: d.action === 'escalate', reason: d.reason || t.reason, confidence: t.confidence, has_deadline: t.has_deadline, sentiment: t.sentiment, kb_basis: t.kb_basis, draft: t.reply, action: d.action, state: 'triaged', error: '' });

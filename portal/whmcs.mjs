@@ -183,7 +183,7 @@ export const customersCsv = (rows) => ['WHMCS client ID,Name,Company,Email,Statu
 
 export function createWhmcs({ db, whmcs, log = console.log }) {
 	let running = false;
-	const get = async (key) => { const r = (await db.query('select value from kv where key = $1', [key]))[0]; return r ? (typeof r.value === 'string' ? JSON.parse(r.value) : r.value) : null; };
+	const get = async (key) => { const r = (await db.query('select value from kv where key = $1', [key]))[0]; return r ? ((typeof r.value === 'string' && /^[\[{"]/.test(r.value) ? JSON.parse(r.value) : r.value)) : null; };
 	const put = (key, val) => db.query('insert into kv (key, value) values ($1, $2) on conflict (key) do update set value = excluded.value, updated_at = now()', [key, JSON.stringify(val)]);
 	const self = {
 		available: () => whmcs.available(),

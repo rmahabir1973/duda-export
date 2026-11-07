@@ -17,7 +17,7 @@ export function createRegistrar({ db, hosted, store = null, whmcs = null, notify
 	async function whmcsIndex() {
 		if (!whmcs) return new Map();
 		const r = (await db.query('select value from kv where key = $1', ['whmcs_snapshot']))[0]; if (!r) return new Map();
-		const snap = typeof r.value === 'string' ? JSON.parse(r.value) : r.value;
+		const snap = (typeof r.value === 'string' && /^[\[{"]/.test(r.value) ? JSON.parse(r.value) : r.value);
 		const clients = new Map((snap.clients || []).map((c) => [c.id, c])), m = new Map();
 		for (const s of snap.services || []) { const d = String(s.domain || '').toLowerCase().replace(/^www\./, ''); if (!d || m.has(d)) continue; const c = clients.get(s.clientid); m.set(d, { client: c ? (c.company || c.name) : 'client ' + s.clientid, email: c?.email || '', product: s.product, service_status: s.status, next_due: s.next }); }
 		return m;
@@ -84,7 +84,7 @@ export function createRegistrar({ db, hosted, store = null, whmcs = null, notify
 			return { found: fresh.length, sent, domains: fresh.map((r) => ({ domain: r.domain, days: r.days, window: r.window })) };
 		},
 	};
-	const kv = async (k) => { const r = (await db.query('select value from kv where key = $1', [k]))[0]; return r ? (typeof r.value === 'string' ? JSON.parse(r.value) : r.value) : null; };
+	const kv = async (k) => { const r = (await db.query('select value from kv where key = $1', [k]))[0]; return r ? ((typeof r.value === 'string' && /^[\[{"]/.test(r.value) ? JSON.parse(r.value) : r.value)) : null; };
 	const putKv = (k, v) => db.query('insert into kv (key, value) values ($1, $2) on conflict (key) do update set value = excluded.value, updated_at = now()', [k, JSON.stringify(v)]);
 	return self;
 }

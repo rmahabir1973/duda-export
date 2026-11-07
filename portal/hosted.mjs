@@ -82,7 +82,7 @@ export function createHosted({ db, clients, duda, dir, ownDomains = [], previewD
 		ascio: clients.ascio || null,
 		async status() {
 			const rows = await db.query("select key, value from kv where key like 'hosted_sync_%'");
-			const s = {}; for (const r of rows) s[r.key.replace('hosted_sync_', '')] = typeof r.value === 'string' ? JSON.parse(r.value) : r.value;
+			const s = {}; for (const r of rows) s[r.key.replace('hosted_sync_', '')] = (typeof r.value === 'string' && /^[\[{"]/.test(r.value) ? JSON.parse(r.value) : r.value);
 			return { running, sources: s, configured: { cloudflare: clients.cloudflare.available(), duda: duda.available(), smartermail: clients.smartermail.available(), hostinger: clients.hostinger.available(), ascio: !!clients.ascio?.available() } };
 		},
 		/** Reads every source, updates the table, and refreshes the "customer domains" the directory matches against. */

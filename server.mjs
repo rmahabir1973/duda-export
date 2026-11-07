@@ -28,6 +28,7 @@ import { makeWhmcsClient, createWhmcs, SUPPORT_ACTIONS } from './portal/whmcs.mj
 import { whmcsRouter } from './portal/whmcsRoutes.mjs';
 import { createRegistrar } from './portal/registrar.mjs';
 import { registrarRouter } from './portal/registrarRoutes.mjs';
+import { createSupportContext } from './portal/supportContext.mjs';
 import { createSupport } from './portal/support.mjs';
 import { supportRouter } from './portal/supportRoutes.mjs';
 import { createAnalytics, makeGa4 } from './portal/analytics.mjs';
@@ -418,7 +419,7 @@ if (portal && portalDb && assistant) {
 	// Support has its own WHMCS login (ticket actions only). Billing stays read-only. With only the billing login, tickets can be read but not answered.
 	const supportClient = makeWhmcsClient({ ...whmcsCfg, identifier: (env.WHMCS_SUPPORT_API_ID || '').trim(), secret: (env.WHMCS_SUPPORT_API_SECRET || '').trim(), actions: SUPPORT_ACTIONS });
 	const mail = deployClients.cfg.postmarkServerToken ? { send: ({ to, subject, text }) => deployClients.postmark.sendEmail({ From: (env.SUPPORT_FROM || 'support@churchwebglobal.com').trim(), To: to.join(','), Subject: subject, TextBody: text, MessageStream: 'outbound' }) } : null;
-	support = createSupport({ db: portalDb, reader: supportClient.available() ? supportClient : whmcsClient, writer: supportClient, ai: { available: () => assistant.configured(), complete: assistant.complete }, mail, env });
+	support = createSupport({ db: portalDb, reader: supportClient.available() ? supportClient : whmcsClient, writer: supportClient, ai: { available: () => assistant.configured(), complete: assistant.complete }, mail, env, context: createSupportContext({ db: portalDb, store: deployStore }) });
 	app.use('/api/support', supportRouter({ need, support }));
 	const mins = Number(env.SUPPORT_POLL_MINUTES ?? 5);
 	if (mins > 0) { const run = () => support.run().then((r) => r.skipped || console.log('support:', `${r.synced} changed, ${r.triaged} sorted, ${r.acted} handled${r.errors.length ? ', problems: ' + r.errors.join('; ') : ''}`)).catch((e) => console.error('support:', e.message)); setTimeout(run, 120000).unref(); setInterval(run, mins * 60000).unref(); }
