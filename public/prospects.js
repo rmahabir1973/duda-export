@@ -41,7 +41,7 @@ function costDetail(c) {
 	}).join('');
 }
 function statusCell(c) {
-	const cur = curOf(c), label = c.runState === 'done' ? 'Ready' : needsYou(c) ? 'Needs you' : c.runState === 'failed' ? 'Stopped' : c.runState === 'idle' ? 'Not started' : cur.title;
+	const cur = curOf(c), label = c.runState === 'done' ? 'Ready' : needsYou(c) ? 'Needs you' : c.runState === 'failed' ? 'Stopped' : c.runState === 'idle' ? 'Not started' : `${cur.title} · ${c.overallPct}%`;
 	return `<span class="chip ${c.runState}">${esc(label)}</span><small>${esc(c.headline || '')}</small>`;
 }
 function actions(c) {
@@ -71,7 +71,10 @@ function custFormHtml(c) {
 }
 function detail(c) {
 	const cur = curOf(c);
-	const bar = cur.state === 'working' && cur.pct != null ? `<div class="bar"><i style="width:${cur.pct}%"></i></div>` : cur.state === 'working' ? '<div class="bar ind"><i></i></div>' : '';
+	const live = ['running', 'needs_input'].includes(c.runState);
+	const bar = live ? `<div class="prog"><div class="prog-top"><span>${c.stepNo ? `Step ${c.stepNo} of 3 · ` : ''}${esc(cur.title)}${c.stepPct != null ? ` ${c.stepPct}%` : ''}</span><b>${c.overallPct}% overall</b></div>
+		<div class="bar${cur.state === 'working' && cur.pct == null ? ' ind' : ''}"><i style="width:${cur.state === 'working' && cur.pct == null ? '' : c.overallPct + '%'}"></i></div></div>` : '';
+	const mail = live && c.emailsTo?.length ? `<div class="hint">You can close this page. An email goes to <b>${c.emailsTo.map(esc).join(', ')}</b> when the staging site is created, when the preview is ready, and if the AI needs an answer.</div>` : '';
 	const q = c.question ? `<div class="qbox"><b>The AI has a question</b><p>${esc(c.question.text)}</p>
 		${(c.question.options || []).map((o) => `<button class="sm" data-ans="${c.id}" data-q="${esc(c.question.id)}" data-v="${esc(o)}">${esc(o)}</button>`).join(' ')}
 		<div class="qrow"><input type="text" data-answer="${c.id}" placeholder="Type your answer" value="${esc(answers[c.id] || '')}"><button class="primary sm2" data-send="${c.id}" data-q="${esc(c.question.id)}">Send</button></div></div>` : '';
@@ -79,7 +82,7 @@ function detail(c) {
 	const adm = adminShown[c.id] ? `<div class="hint">Admin login: <code>${esc(adminShown[c.id].login)}</code> / <code>${esc(adminShown[c.id].password)}</code></div>` : '';
 	const docs = c.docs.length ? `<ul class="pr-docs">${c.docs.map((d) => `<li class="${d.readable ? '' : 'bad'}">${esc(d.name)} <small>${esc(d.note || '')}</small></li>`).join('')}</ul>` : '';
 	return `${custOpen === c.id ? custFormHtml(c) : ''}<ol class="stages">${c.stages.map(stageHtml).join('')}</ol>
-		<div class="status ${cur.state}"><span>${esc(c.headline)}</span></div>${bar}${q}${blocked}
+		<div class="status ${cur.state}"><span>${esc(c.headline)}</span></div>${bar}${mail}${q}${blocked}
 		<div class="pr-det">
 			<div class="hint">Staff login on the preview: <code>churchweb</code> with the standard staff password. ${me?.user?.role === 'admin' && c.previewUrl ? `<a href="#" data-adm="${c.id}">Show admin login</a>` : ''}</div>${adm}
 			${costDetail(c)}

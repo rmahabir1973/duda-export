@@ -100,7 +100,7 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 		const j = exporter.get(run.exportJobId);
 		if (!j) { patch(ch.id, (r) => { r.exportJobId = null; r.steps.export = { state: 'failed', message: 'The export was lost (the portal restarted). Press Try again.', pct: null }; r.state = 'failed'; }); return true; }
 		if (j.status === 'queued') { setStep(ch.id, 'export', { state: 'working', message: 'Waiting in line for the export…' }); return true; }
-		if (j.status === 'running') { setStep(ch.id, 'export', { state: 'working', message: clip(j.lastLog || 'Reading the church website…', 140) }); return true; }
+		if (j.status === 'running') { setStep(ch.id, 'export', { state: 'working', message: j.phase ? clip(j.phase, 140) + '…' : clip(j.lastLog || 'Reading the church website…', 140), pct: j.pct ?? null }); return true; }
 		if (j.status === 'done' && j.zipPath) {
 			fs.mkdirSync(dir(ch.id), { recursive: true });
 			fs.copyFileSync(j.zipPath, path.join(dir(ch.id), 'export.zip'));
@@ -140,6 +140,7 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 				store.update(ch.id, (c) => { const st = (c.stages.preview ||= {}); (st.manual ||= {}).oxygen = true; st.results = { ...results, oxygen: { state: 'ok', detail: lic.detail } }; st.at = now(); st.done = needed(engine, stage, c).every((q) => engine.isSatisfied(st.results[q.id]?.state)); c.prospect.siteReadyAt = now(); c.prospect.expiresAt = now() + PREVIEW_DAYS * DAY; });
 				setStep(ch.id, 'site', { state: 'done', message: `The preview site is ready at ${previewHost(cur)}.`, pct: 100 });
 				note(ch.id, 'Preview site created');
+				await tell(cur, `Staging site created: ${cur.name}`, `The export of ${cur.prospect.domain} is finished and the staging WordPress site exists at:\nhttps://${previewHost(cur)}\n\nThe AI is now building the pages. You will get another email when the preview is ready to look at.\n\n${baseUrl}/prospects`);
 				return true;
 			}
 			saveResults();
@@ -432,9 +433,13 @@ export function createProspects({ store, clients, exporter, dataDir, notify = nu
 		});
 		const cur = stages.find((x) => x.state !== 'done');
 		const headline = !cur ? 'Preview ready' : (cur.message || (cur.state === 'waiting' ? 'Waiting to start' : ''));
+		// One number for the whole run. The export and the site creation are a quarter each; the AI build is the other half, because that is where the time goes.
+		const share = { export: 25, site: 25, build: 50 }, stepPct = (k) => s[k].state === 'done' ? 100 : (s[k].pct ?? 0);
+		const overallPct = Math.round(Object.entries(share).reduce((a, [k, w]) => a + w * stepPct(k) / 100, 0));
+		const stepNo = { export: 1, site: 2, build: 3 }[cur?.key] || null;
 		return {
 			id: ch.id, name: ch.name, domain: p.domain, mode: p.mode, platform: p.platform || '', contactEmail: ch.contactEmail || '', createdAt: p.createdAt, createdBy: ch.createdBy || '',
-			runState: run.state, headline, stages, currentStage: cur?.key || 'ready', docs: (p.docs || []).map((d) => ({ n: d.n, name: d.name, size: d.size, readable: !!d.readable, note: d.note || '' })),
+			runState: run.state, headline, stages, currentStage: cur?.key || 'ready', overallPct, stepNo, stepPct: cur && cur.pct != null ? cur.pct : null, emailsTo: notify ? mailTo(ch) : [], docs: (p.docs || []).map((d) => ({ n: d.n, name: d.name, size: d.size, readable: !!d.readable, note: d.note || '' })),
 			previewUrl: s.site.state === 'done' ? `https://${previewHost(ch)}` : '', expiresAt: p.expiresAt || null, daysLeft: left, kept: !!p.kept, exported: p.exported || null,
 			canStart: ['idle', 'failed', 'waiting'].includes(run.state), canRetry: run.state === 'failed' || s.build.state === 'blocked',
 			zipReady: fs.existsSync(path.join(dir(ch.id), 'export.zip')),

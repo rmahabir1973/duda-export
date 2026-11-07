@@ -393,3 +393,27 @@ test('guard: a name already used by a Hostinger site is never reused, and a site
 	const v = r2.p.view(r2.store.get(d.id));
 	assert.equal(r2.calls.fix.length, 0, 'nothing was fixed or installed'); assert.equal(v.runState, 'failed'); assert.match(v.headline, /already exists/);
 });
+
+test('progress: the export percentage comes through, one overall figure covers the run, and an email goes out when the staging site exists', async () => {
+	const r = rig(); const c = await make(r); r.p.start(c.id);
+	await r.p.tick(c.id);
+	// while the exporter is reading pages it reports a percentage and a phase
+	r.job.status = 'running'; r.job.pct = 40; r.job.phase = 'Reading page 4 of 6';
+	await r.p.tick(c.id);
+	let v = r.p.view(r.store.get(c.id));
+	assert.equal(v.stepNo, 1); assert.equal(v.stepPct, 40); assert.equal(v.overallPct, 10); // 25% weight × 40%
+	assert.match(v.headline, /Reading page 4 of 6/);
+	assert.deepEqual(v.emailsTo, ['staff@x.ca', 'boss@x.ca']);
+	// export done: the site step starts; overall is at least the export's quarter
+	r.job.status = 'done'; await r.p.tick(c.id);
+	v = r.p.view(r.store.get(c.id)); assert.equal(v.stepNo, 2); assert.ok(v.overallPct >= 25 && v.overallPct < 50, String(v.overallPct));
+	// finish the site steps
+	for (let i = 0; i < 6; i++) { r.clock.t += 200000; await r.p.tick(c.id); }
+	v = r.p.view(r.store.get(c.id));
+	assert.equal(v.stages[2].state, 'done');
+	const m = r.mail.find((x) => /Staging site created/.test(x.subject));
+	assert.ok(m, 'a staging-site email was sent');
+	assert.deepEqual(m.to, ['staff@x.ca', 'boss@x.ca']);
+	assert.match(m.text, /grace-united-church\.churchwebglobal\.com/); assert.match(m.text, /another email when the preview is ready/);
+	assert.ok(v.overallPct >= 50, String(v.overallPct));
+});

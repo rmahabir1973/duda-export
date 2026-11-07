@@ -104,7 +104,7 @@ async function validateDomain(raw) {
 /* ---------------------------------------------------------------- jobs */
 const jobs = new Map();
 const jobDir = (id) => path.join(DATA_DIR, 'jobs', id);
-const publicJob = (j) => ({ id: j.id, label: j.label || '', domain: j.domain, site: j.site || '', useApi: j.useApi, status: j.status, created: j.created, started: j.started, ended: j.ended, summary: j.summary, error: j.error, by: j.by, opts: j.opts });
+const publicJob = (j) => ({ id: j.id, label: j.label || '', domain: j.domain, site: j.site || '', useApi: j.useApi, status: j.status, created: j.created, started: j.started, ended: j.ended, summary: j.summary, error: j.error, by: j.by, opts: j.opts, pct: j.pct ?? null, phase: j.phase || '' });
 function persist(j) {
 	try {
 		fs.writeFileSync(path.join(jobDir(j.id), 'job.json'), JSON.stringify({ ...publicJob(j), zip: j.zip }, null, 2));
@@ -125,8 +125,11 @@ for (const id of fs.readdirSync(path.join(DATA_DIR, 'jobs'))) {
 const running = new Set();
 const queue = [];
 
+const PROGRESS_RE = /^\s*progress (\d{1,3})% (.*)$/;
 function logLine(j, line) {
 	if (!line) return;
+	const pm = PROGRESS_RE.exec(line);
+	if (pm) { j.pct = Math.min(100, Number(pm[1])); j.phase = pm[2].trim().slice(0, 140); }
 	j.log.push(line);
 	if (j.log.length > 400) j.log.shift();
 	try {
@@ -362,7 +365,7 @@ const prospects = createProspects({
 	store: deployStore, clients: deployClients, dataDir: DATA_DIR,
 	exporter: {
 		enqueue: (b, by) => enqueue(b, by),
-		get: (id) => { const j = jobs.get(id); if (!j) return null; const t = j.log.find((l) => /site type:/i.test(l)); return { status: j.status, error: j.error, summary: j.summary, lastLog: j.log[j.log.length - 1] || '', zipPath: j.zip ? path.join(jobDir(j.id), j.zip) : null, platform: t ? (/site type:\s*([^(,]+)/i.exec(t)?.[1] || '').trim() : '' }; },
+		get: (id) => { const j = jobs.get(id); if (!j) return null; const t = j.log.find((l) => /site type:/i.test(l)); return { status: j.status, error: j.error, summary: j.summary, lastLog: j.log[j.log.length - 1] || '', pct: j.pct ?? null, phase: j.phase || '', zipPath: j.zip ? path.join(jobDir(j.id), j.zip) : null, platform: t ? (/site type:\s*([^(,]+)/i.exec(t)?.[1] || '').trim() : '' }; },
 	},
 	notify: deployClients.cfg.postmarkServerToken ? ({ to, subject, text }) => deployClients.postmark.sendEmail({ From: (env.SUPPORT_FROM || 'support@churchwebglobal.com').trim(), To: to.join(','), Subject: subject, TextBody: text, MessageStream: 'outbound' }) : null,
 	alertTo: lines(env.PROSPECT_ALERT_TO || env.SUPPORT_ESCALATE_TO),
