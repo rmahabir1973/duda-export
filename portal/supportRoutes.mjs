@@ -9,7 +9,7 @@ export function supportRouter({ need, support }) {
 	const wrap = (fn, code = 400) => async (req, res) => { try { res.json(await fn(req)); } catch (e) { res.status(code).json({ error: e.message }); } };
 	const by = (req) => req.user?.email || 'unknown';
 	r.get('/status', wrap(() => support.status()));
-	r.get('/tickets', wrap((req) => support.list({ state: req.query.state, category: req.query.category, q: req.query.q, limit: req.query.limit, offset: req.query.offset })));
+	r.get('/tickets', wrap((req) => support.list({ state: req.query.state, category: req.query.category, q: req.query.q, dept: req.query.dept, limit: req.query.limit, offset: req.query.offset })));
 	r.get('/tickets/:id', wrap(async (req) => { const t = await support.get(id(req)); if (!t) throw new Error('No such ticket.'); return t; }));
 	r.get('/log', wrap((req) => support.log(req.query.limit)));
 	r.post('/run', wrap((req) => support.run({ by: by(req) }), 409));

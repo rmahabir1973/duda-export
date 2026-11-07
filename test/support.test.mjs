@@ -190,3 +190,21 @@ test('the Support screen says exactly which settings are missing for answering t
 	assert.deepEqual(mk(half, {}).writeMissing, ['WHMCS_SUPPORT_API_SECRET', 'SUPPORT_ADMIN_USERNAME']); assert.deepEqual(mk(null, ENV).writeMissing, ['WHMCS_SUPPORT_API_ID', 'WHMCS_SUPPORT_API_SECRET']);
 	const full = mk(world([]).writer, ENV); assert.deepEqual(full.writeMissing, []); assert.equal(full.write, true);
 });
+
+test('billing routing: billing escalations go to the billing list when one is set, support ones to the support list; account facts let a factual billing question be answered', async () => {
+	const { sent, sup, db } = await setup({ settings: { notify: ['wayne@x.ca'], notifyBilling: ['chad@x.ca'] } });
+	await sup.run();
+	const esc = sent.filter((m) => !/Support summary/.test(m.subject));
+	const billing = esc.filter((m) => /^\[\w+\] Billing ticket/.test(m.subject)), support = esc.filter((m) => /^\[\w+\] Support ticket/.test(m.subject));
+	assert.equal(billing.length, 1, 'the billing ticket (ticket 6) was escalated as billing'); assert.ok(billing.every((m) => m.to.join() === 'chad@x.ca')); assert.ok(support.length >= 1 && support.every((m) => m.to.join() === 'wayne@x.ca'));
+	assert.equal((await sup.settings()).notifyBilling.join(), 'chad@x.ca');
+	// a factual billing answer grounded in the account facts may be sent; one grounded only in the knowledge still goes to a person
+	const { decide } = await import('../portal/support.mjs');
+	const row = { client_id: 5, sender: 'a@b.ca' };
+	assert.equal(decide({ category: 'billing', reply: 'Hi Pat, invoice #501 for 948.00 CAD is due 2026-10-15.', kb_basis: 'account', confidence: 0.95, needs_human: false }, row).action, 'reply');
+	assert.equal(decide({ category: 'billing', reply: 'Hi Pat, cheques take 2-3 weeks.', kb_basis: 'Cheques can take 2 to 3 weeks', confidence: 0.95, needs_human: false }, row).action, 'escalate');
+	assert.equal(decide({ category: 'billing', reply: 'Hi Pat, done.', kb_basis: 'account', confidence: 0.95, needs_human: true, reason: 'wants the billing email changed' }, row).action, 'escalate');
+	// the department from WHMCS is kept on the ticket and can be filtered on
+	await db.query("update support_tickets set department = 'Billing' where id = 2");
+	assert.deepEqual((await sup.list({ state: 'all', dept: 'billing' })).rows.map((r) => Number(r.id)), [2]);
+});

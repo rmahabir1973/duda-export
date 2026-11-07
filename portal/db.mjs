@@ -172,6 +172,9 @@ const MIGRATIONS = [
 	create table if not exists registrar_actions (domain text primary key, decision text not null default '', note text not null default '', by text not null default '', at timestamptz not null default now());
 	create table if not exists registrar_alerts (domain text not null, window_days int not null, expires timestamptz, at timestamptz not null default now(), primary key (domain, window_days));
 	`],
+	[9, `
+	alter table support_tickets add column if not exists department text not null default '';
+	`],
 ];
 
 /** Applies any migration not yet applied. Safe to run on every start. */
