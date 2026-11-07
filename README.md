@@ -129,6 +129,8 @@ Open **Email setup** (top of the screen). Four steps, in this order:
 
 SmarterMail variables: `SMARTERMAIL_URL`, `SMARTERMAIL_ADMIN_USER`, `SMARTERMAIL_ADMIN_PASSWORD`. Optional: `SMARTERMAIL_DOMAIN_PATH` (default `C:\SmarterMail\Domains\{domain}`: check it against an existing domain) and `SMARTERMAIL_DOMAIN_ADMIN` (default `postmaster`). Not yet tested against the live mail server.
 
+Ascio (the registrar) on the Domains tab: `ASCIO_ACCOUNT` and `ASCIO_PASSWORD` (a dedicated Ascio portal user, not a person's login). Ascio Web Service v3 is SOAP and only answers from IPs whitelisted under Account Settings → Whitelisting in the Ascio portal, so every Railway static outbound IP has to be listed there. Optional: `ASCIO_ENV=ote` for Ascio's test system, `ASCIO_URL` to override the endpoint. `GET /api/hosted/ascio-test` checks the login and whitelist without a full sync.
+
 ### Environment variables (set as Railway variables, never in chat)
 
 `GATEWAY_ADMIN_KEY`, `GATEWAY_URL`, `DEFAULT_DAILY_TOKENS`, `DEFAULT_DAILY_IMAGES` · `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_PREVIEW_ZONE_ID`, `PREVIEW_DOMAIN`, `HOSTINGER_IP`, `TEMPLATE_SLUG` · `POSTMARK_ACCOUNT_TOKEN`, `POSTMARK_SERVER_TOKEN` · `SSH_HOST`, `SSH_PORT`, `SSH_USER`, `SSH_PRIVATE_KEY` (use `\n` for line breaks), `SSH_PASSPHRASE`, `SITE_ROOT` (default `$HOME/domains/{host}/public_html`), `WP_CLI` · `DUDA_IPS`, `DUDA_HOSTS`, `OUR_MX_HOSTS`, `MAIL_HOST`, `DMARC_RUA`, `DNS_SERVERS` · `SMARTERMAIL_API_READY`.

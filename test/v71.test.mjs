@@ -180,6 +180,11 @@ async function hostedEnv({ cf = ['erindaleunited.church', 'zoneonly.org', 'churc
 		cloudflare: { available: () => true, zones: async () => { if (cfFails) throw new Error('Cloudflare: token cannot access this account'); return cf.map((name) => ({ id: 'z' + name, name, status: 'active' })); } },
 		smartermail: { available: () => true, sysLogin: async () => 'tok', domains: async () => ({ ok: true, domains: mail }) },
 		hostinger: { available: () => true, websites: async () => [{ domain: 'grace.churchwebglobal.com', username: 'u1' }], parkedDomains: async () => ['www.erindaleunited.church'] },
+		ascio: { available: () => true, allDomains: async () => ({ total: 3, domains: [
+			{ domain: 'erindaleunited.church', handle: 'D1', status: 'Active', expires: '2027-03-04T00:00:00', created: '2015-03-04T00:00:00', transfer_lock: 'Lock', nameservers: ['ada.ns.cloudflare.com', 'bob.ns.cloudflare.com'], owner_org: 'Erindale United Church', customer_ref: '' },
+			{ domain: 'regonly.ca', handle: 'D2', status: 'Active', expires: new Date(Date.now() + 20 * 86400000).toISOString(), created: null, transfer_lock: 'Unlock', nameservers: ['ns1.other.net'], owner_org: '', owner_name: 'Jane Doe', customer_ref: 'CW-77' },
+			{ domain: 'churchwebglobal.com', handle: 'D3', status: 'Active', expires: new Date(Date.now() + 10 * 86400000).toISOString(), created: null, transfer_lock: 'Lock', nameservers: [], owner_org: 'ChurchWeb Global Inc.', customer_ref: '' },
+		] }) },
 	};
 	const duda = fakeDuda(dudaSites || [{ n: 'aaa', pub: true, d: 'www.erindaleunited.church' }, { n: 'bbb', pub: false, d: '' }, { n: 'ccc', pub: true, d: 'dudaonly.ca' }]);
 	const hosted = createHosted({ db, clients, duda, dir, ownDomains: ['churchwebsupport.com'], log: () => {} });
@@ -189,16 +194,25 @@ async function hostedEnv({ cf = ['erindaleunited.church', 'zoneonly.org', 'churc
 test('hosted sync: merges the four sources per domain, leaves out our own domains, and marks directory churches as customers', async () => {
 	const { hosted, dir, db } = await hostedEnv();
 	const res = await hosted.sync();
-	assert.deepEqual(Object.fromEntries(Object.entries(res).map(([k, v]) => [k, v.ok])), { cloudflare: true, duda: true, smartermail: true, hostinger: true });
+	assert.deepEqual(Object.fromEntries(Object.entries(res).map(([k, v]) => [k, v.ok])), { cloudflare: true, duda: true, smartermail: true, hostinger: true, ascio: true });
 	const l = await hosted.lookup('www.ErindaleUnited.church');
-	assert.deepEqual(l.hosted, { cloudflare: 'yes (active)', duda: 'yes (site aaa)', smartermail: 'yes', hostinger: 'yes (grace.churchwebglobal.com)' });
+	assert.deepEqual(l.hosted, { cloudflare: 'yes (active)', duda: 'yes (site aaa)', smartermail: 'yes', hostinger: 'yes (grace.churchwebglobal.com)', ascio: 'yes (expires 2027-03-04)' });
+	assert.equal(l.registration.transfer_lock, 'Lock'); assert.deepEqual(l.registration.nameservers, ['ada.ns.cloudflare.com', 'bob.ns.cloudflare.com']);
+	assert.equal((await hosted.lookup('zoneonly.org')).registration.registrar, 'not registered through our Ascio account');
+	// registrar views: a domain only Ascio knows is still listed; renewals due soon come soonest first and include our own domain; the customer-only views still hide our own domains
+	assert.ok((await hosted.list({})).rows.some((r) => r.domain === 'regonly.ca'));
+	assert.deepEqual((await hosted.list({ gap: 'expiring' })).rows.map((r) => r.domain), ['churchwebglobal.com', 'regonly.ca']);
+	assert.deepEqual((await hosted.list({ gap: 'ascio-not-cloudflare' })).rows.map((r) => r.domain), ['regonly.ca']);
+	assert.deepEqual((await hosted.list({ gap: 'cloudflare-not-ascio' })).rows.map((r) => r.domain), ['zoneonly.org']);
+	const ex = await hosted.expiring({ days: 15 }); assert.deepEqual(ex.map((r) => r.domain), ['churchwebglobal.com']);
+	const c = await hosted.counts(); assert.equal(c.ascio, 3); assert.equal(c.expiring, 2);
 	assert.equal(l.directory_listings[0].name, 'Erindale United Church'); assert.equal(l.directory_listings[0].is_customer, true);
 	const all = (await hosted.list({})).rows.map((r) => r.domain);
 	assert.ok(!all.some((d) => d.endsWith('churchwebglobal.com')), 'our own domains and preview sites are not customers'); assert.ok(all.includes('zoneonly.org') && all.includes('dudaonly.ca') && all.includes('mailonly.ca'));
 	assert.deepEqual((await hosted.list({ gap: 'duda-not-cloudflare' })).rows.map((r) => r.domain), ['dudaonly.ca']);
 	assert.deepEqual((await hosted.list({ gap: 'mail-not-cloudflare' })).rows.map((r) => r.domain), ['mailonly.ca']);
 	assert.equal((await dir.list({ customer: 'yes' })).rows.length, 1, 'only Erindale matches; the other church is not hosted by us');
-	assert.equal((await db.query("select count(*)::int as n from customer_domains where source = 'sync'"))[0].n, all.length);
+	assert.equal((await db.query("select count(*)::int as n from customer_domains where source = 'sync'"))[0].n, all.length, 'every customer domain, including one only the registrar knows');
 	const unknown = await hosted.lookup('nothostedhere.org'); assert.equal(unknown.hosted, null); assert.match(unknown.note, /Not found in the last sync/);
 });
 

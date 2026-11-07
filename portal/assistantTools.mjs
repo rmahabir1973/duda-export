@@ -70,15 +70,21 @@ export function buildTools({ store, clients, dir, outreach, audit, hosted, whmcs
 		...(hosted ? [
 			{
 				name: 'lookup_domain', kind: 'read',
-				description: 'THE way to answer "do we host / is X a customer": looks one domain up in what we host (Cloudflare, DUDA, SmarterMail email, Hostinger), on the Customers board, and in the United Church directory. Also says how fresh the data is and which sources failed, so say so when a source is missing instead of guessing.',
+				description: 'THE way to answer "do we host / is X a customer": looks one domain up in what we host (Cloudflare, DUDA, SmarterMail email, Hostinger) and whether it is registered through our Ascio account (expiry date, status, transfer lock, nameservers), on the Customers board, and in the United Church directory. Also says how fresh the data is and which sources failed, so say so when a source is missing instead of guessing.',
 				input_schema: { type: 'object', properties: { domain: { type: 'string', description: 'e.g. erindaleunited.church' } }, required: ['domain'] },
 				run: async ({ domain }) => { const [r, st] = [await hosted.lookup(domain, store), await hosted.status()]; return { ...r, sources_last_sync: Object.fromEntries(Object.entries(st.sources).map(([k, v]) => [k, v.ok ? `ok ${v.at}` : `FAILED: ${v.error}`])), sources_never_run: Object.keys(st.configured).filter((k) => !st.sources[k]), sources_not_configured: Object.keys(st.configured).filter((k) => !st.configured[k]) }; },
 			},
 			{
 				name: 'list_hosted_domains', kind: 'read',
-				description: 'Lists domains we host, optionally filtered. gap: cloudflare, duda, smartermail, hostinger, duda-not-cloudflare, cloudflare-not-duda, mail-not-cloudflare, no-mail. Returns at most 40.',
+				description: 'Lists domains we host, optionally filtered. gap: cloudflare, duda, smartermail, hostinger, ascio (registered through us), expiring (renewal due within 60 days, soonest first), expired, ascio-not-cloudflare, cloudflare-not-ascio, ascio-ns-elsewhere, duda-not-cloudflare, cloudflare-not-duda, mail-not-cloudflare, no-mail. Returns at most 40.',
 				input_schema: { type: 'object', properties: { q: { type: 'string' }, gap: { type: 'string' } } },
-				run: async ({ q, gap }) => { const r = await hosted.list({ q, gap, limit: 40 }); return { total_matching: r.total, counts: await hosted.counts(), domains: r.rows.map((x) => ({ domain: x.domain, cloudflare: x.in_cloudflare, duda: x.in_duda, email: x.in_smartermail, hostinger: x.in_hostinger })) }; },
+				run: async ({ q, gap }) => { const r = await hosted.list({ q, gap, limit: 40 }); return { total_matching: r.total, counts: await hosted.counts(), domains: r.rows.map((x) => ({ domain: x.domain, cloudflare: x.in_cloudflare, duda: x.in_duda, email: x.in_smartermail, hostinger: x.in_hostinger, registered_with_us: x.in_ascio, ...(x.in_ascio ? { expires: x.ascio_expires, registrar_status: x.ascio_status, transfer_lock: x.ascio_lock, nameservers: x.ascio_ns } : {}) })) }; },
+			},
+			{
+				name: 'domains_expiring', kind: 'read',
+				description: 'Domains registered through our Ascio account whose renewal is due within N days (default 60), soonest first, our own domains included. Use for "what expires this month", "any renewals due", "is X about to expire".',
+				input_schema: { type: 'object', properties: { days: { type: 'integer', description: 'Look-ahead window in days, 1-365. Default 60.' } } },
+				run: async ({ days }) => { const rows = await hosted.expiring({ days: Math.min(365, Math.max(1, +days || 60)), limit: 100 }); const st = await hosted.status(); return { window_days: Math.min(365, Math.max(1, +days || 60)), count: rows.length, ascio_last_sync: st.sources.ascio ? (st.sources.ascio.ok ? st.sources.ascio.at : 'FAILED: ' + st.sources.ascio.error) : (st.configured.ascio ? 'never run' : 'Ascio is not set up'), domains: rows.map((r) => ({ domain: r.domain, expires: r.ascio_expires, status: r.ascio_status, transfer_lock: r.ascio_lock, dns_in_cloudflare: r.in_cloudflare, site_on_duda: r.in_duda, site_on_hostinger: r.in_hostinger })) }; },
 			},
 		] : []),
 		{ name: 'outreach_stats', kind: 'read', description: 'Prospect email results for the last 30 days (sent, delivered, opened, clicked, bounced, unsubscribed) and today\'s sending allowance.', input_schema: { type: 'object', properties: {} }, run: async () => (outreach ? outreach.stats() : { error: 'Outreach is not set up.' }) },

@@ -3,6 +3,7 @@
 import dns from 'node:dns/promises';
 import tls from 'node:tls';
 import net from 'node:net';
+import { makeAscio } from './ascio.mjs';
 import { makeSmarterMail } from './smartermail.mjs';
 import crypto from 'node:crypto';
 
@@ -61,6 +62,7 @@ export function configFromEnv(env = process.env) {
 		smartermailUrl: (() => { const u = clean(env.SMARTERMAIL_URL); return u ? (/^https?:\/\//i.test(u) ? u : 'https://' + u).replace(/\/$/, '') : ''; })(),
 		smartermailUser: clean(env.SMARTERMAIL_ADMIN_USER), smartermailPassword: String(env.SMARTERMAIL_ADMIN_PASSWORD || '').trim(),
 		smartermailDomainPath: env.SMARTERMAIL_DOMAIN_PATH || 'C:\\SmarterMail\\Domains\\{domain}', smartermailDomainAdmin: env.SMARTERMAIL_DOMAIN_ADMIN || 'postmaster',
+		ascioAccount: clean(env.ASCIO_ACCOUNT), ascioPassword: String(env.ASCIO_PASSWORD || '').trim(), ascioLive: String(env.ASCIO_ENV || 'live').toLowerCase() !== 'ote', ascioUrl: clean(env.ASCIO_URL),
 	};
 }
 
@@ -76,6 +78,7 @@ export const configured = (cfg) => ({
 	hostingerApi: !!cfg.hostingerApiKey,
 	staffLogin: !!cfg.staffLoginPassword,
 	oxygenLicense: !!cfg.oxygenLicense,
+	ascio: !!(cfg.ascioAccount && cfg.ascioPassword),
 });
 
 async function req(fetchFn, url, { method = 'GET', headers = {}, body, timeout = 20000 } = {}) {
@@ -292,5 +295,6 @@ export function makeClients(cfg, deps = {}) {
 		deleteWebsite: (domain) => hostinger.call('DELETE', `/api/hosting/v1/websites/${encodeURIComponent(domain)}`),
 	};
 	const smartermail = makeSmarterMail(cfg, { fetch: f });
-	return { cfg, gateway, cloudflare, postmark, dns: dnsClient, http, tls: tlsInfo, ssh, probe, smartermail, hostinger };
+	const ascio = makeAscio({ account: cfg.ascioAccount, password: cfg.ascioPassword, live: cfg.ascioLive, url: cfg.ascioUrl, fetchImpl: f });
+	return { cfg, gateway, cloudflare, postmark, dns: dnsClient, http, tls: tlsInfo, ssh, probe, smartermail, hostinger, ascio };
 }

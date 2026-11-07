@@ -1,4 +1,4 @@
-// "What do we host?": pulls domain names from Cloudflare, DUDA, SmarterMail and Hostinger into one table, so the portal (and the assistant) can answer it.
+// "What do we host?": pulls domain names from Cloudflare, DUDA, SmarterMail, Hostinger and Ascio (the registrar) into one table, so the portal (and the assistant) can answer it.
 // Each source reports its own result; a source that fails never wipes what the others found.
 const DOMAIN_RE = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
 import { SLUG_RE } from '../deploy/store.mjs';
@@ -65,16 +65,25 @@ export function createHosted({ db, clients, duda, dir, ownDomains = [], previewD
 			await Promise.all(Array.from({ length: 4 }, async () => { while (i < sites.length) { const w = sites[i++]; if (!w.username || !(w.domain || w.name)) continue; try { for (const p of await clients.hostinger.parkedDomains(w.username, w.domain || w.name)) { const d = normHost(typeof p === 'string' ? p : p.domain || p.parked_domain || p.name); if (d) out.push({ domain: d, hostinger_site: normHost(w.domain || w.name) }); } } catch { /* parked domains are a bonus */ } } }));
 			return out;
 		},
+		/** The registrar: every domain registered through our Ascio account, with expiry, status, lock and nameservers. */
+		async ascio() {
+			const a = clients.ascio; if (!a?.available()) throw new Error('Ascio is not set up (ASCIO_ACCOUNT, ASCIO_PASSWORD; whitelist this server\'s IPs in the Ascio portal).');
+			const r = await a.allDomains();
+			const rows = r.domains.filter((d) => d.domain).map((d) => ({ domain: d.domain, ascio_handle: d.handle, ascio_status: d.status, ascio_expires: d.expires, ascio_created: d.created, ascio_lock: d.transfer_lock, ascio_ns: JSON.stringify(d.nameservers), ascio_owner: d.owner_org || d.owner_name, ascio_ref: d.customer_ref }));
+			return { rows, note: `${r.total} registered${rows.length !== r.total ? `, ${rows.length} read` : ''}` };
+		},
 	};
-	const COLS = { cloudflare: 'in_cloudflare', duda: 'in_duda', smartermail: 'in_smartermail', hostinger: 'in_hostinger' };
+	const COLS = { cloudflare: 'in_cloudflare', duda: 'in_duda', smartermail: 'in_smartermail', hostinger: 'in_hostinger', ascio: 'in_ascio' };
+	const EXTRA = { cloudflare: ['cf_status'], duda: ['duda_site', 'duda_status'], hostinger: ['hostinger_site'], ascio: ['ascio_handle', 'ascio_status', 'ascio_expires', 'ascio_created', 'ascio_lock', 'ascio_ns', 'ascio_owner', 'ascio_ref'] };
 
 	const self = {
 		sources: Object.keys(sources),
 		isOwn,
+		ascio: clients.ascio || null,
 		async status() {
 			const rows = await db.query("select key, value from kv where key like 'hosted_sync_%'");
 			const s = {}; for (const r of rows) s[r.key.replace('hosted_sync_', '')] = typeof r.value === 'string' ? JSON.parse(r.value) : r.value;
-			return { running, sources: s, configured: { cloudflare: clients.cloudflare.available(), duda: duda.available(), smartermail: clients.smartermail.available(), hostinger: clients.hostinger.available() } };
+			return { running, sources: s, configured: { cloudflare: clients.cloudflare.available(), duda: duda.available(), smartermail: clients.smartermail.available(), hostinger: clients.hostinger.available(), ascio: !!clients.ascio?.available() } };
 		},
 		/** Reads every source, updates the table, and refreshes the "customer domains" the directory matches against. */
 		async sync() {
@@ -89,7 +98,7 @@ export function createHosted({ db, clients, duda, dir, ownDomains = [], previewD
 						const col = COLS[name];
 						await db.query(`update hosted_domains set ${col} = false, updated_at = now() where ${col}`);
 						for (const r of rows) {
-							const sets = { [col]: true, ...(name === 'cloudflare' ? { cf_status: r.cf_status || '' } : {}), ...(name === 'duda' ? { duda_site: r.duda_site, duda_status: r.duda_status } : {}), ...(name === 'hostinger' ? { hostinger_site: r.hostinger_site } : {}) };
+							const sets = { [col]: true }; for (const k of EXTRA[name] || []) sets[k] = r[k] ?? (k.endsWith('_expires') || k.endsWith('_created') ? null : k === 'ascio_ns' ? '[]' : '');
 							const keys = Object.keys(sets);
 							await db.query(`insert into hosted_domains (domain, ${keys.join(', ')}) values ($1, ${keys.map((_, i) => '$' + (i + 2)).join(', ')}) on conflict (domain) do update set ${keys.map((k, i) => `${k} = $${i + 2}`).join(', ')}, updated_at = now()`, [r.domain, ...keys.map((k) => sets[k])]);
 						}
@@ -98,14 +107,14 @@ export function createHosted({ db, clients, duda, dir, ownDomains = [], previewD
 					} catch (e) { results[name] = { ok: false, at, error: String(e.message).slice(0, 300) }; log(`hosted sync: ${name} failed: ${e.message}`); }
 					await db.query("insert into kv (key, value) values ($1, $2) on conflict (key) do update set value = excluded.value, updated_at = now()", ['hosted_sync_' + name, JSON.stringify(results[name])]);
 				}));
-				await db.query('delete from hosted_domains where not (in_cloudflare or in_duda or in_smartermail or in_hostinger)');
+				await db.query('delete from hosted_domains where not (in_cloudflare or in_duda or in_smartermail or in_hostinger or in_ascio)');
 				await self.feedDirectory();
 				return results;
 			} finally { running = false; }
 		},
 		/** Everything we host that is not our own infrastructure counts as a customer domain for the directory match. */
 		async feedDirectory() {
-			const rows = await db.query('select domain from hosted_domains where in_cloudflare or in_duda or in_smartermail');
+			const rows = await db.query('select domain from hosted_domains where in_cloudflare or in_duda or in_smartermail or in_ascio');
 			const list = rows.map((r) => r.domain).filter((d) => !isOwn(d));
 			await db.query("delete from customer_domains where source = 'sync'");
 			for (const d of list) await db.query("insert into customer_domains (domain, source) values ($1, 'sync') on conflict (domain) do nothing", [d]);
@@ -115,13 +124,16 @@ export function createHosted({ db, clients, duda, dir, ownDomains = [], previewD
 		async list({ q = '', gap = '', limit = 200, offset = 0 } = {}) {
 			const w = [], p = [];
 			if (q) { p.push('%' + String(q).toLowerCase().replace(/[\\%_]/g, '\\$&') + '%'); w.push(`domain like $${p.length}`); }
-			for (const o of own) { p.push(o); w.push(`domain <> $${p.length}`); p.push('%.' + o); w.push(`domain not like $${p.length}`); } // our own infrastructure is not a customer
-			const g = { 'duda-not-cloudflare': 'in_duda and not in_cloudflare', 'cloudflare-not-duda': 'in_cloudflare and not in_duda', 'mail-not-cloudflare': 'in_smartermail and not in_cloudflare', 'not-in-cloudflare': 'not in_cloudflare', 'no-mail': 'not in_smartermail', 'duda': 'in_duda', 'cloudflare': 'in_cloudflare', 'smartermail': 'in_smartermail', 'hostinger': 'in_hostinger' }[gap];
+			const expiryViews = new Set(['expiring', 'expired', 'ascio']);
+			if (!expiryViews.has(gap)) for (const o of own) { p.push(o); w.push(`domain <> $${p.length}`); p.push('%.' + o); w.push(`domain not like $${p.length}`); } // our own infrastructure is not a customer (but its renewals still matter, so the registrar views keep it)
+			const g = { 'duda-not-cloudflare': 'in_duda and not in_cloudflare', 'cloudflare-not-duda': 'in_cloudflare and not in_duda', 'mail-not-cloudflare': 'in_smartermail and not in_cloudflare', 'not-in-cloudflare': 'not in_cloudflare', 'no-mail': 'not in_smartermail', 'duda': 'in_duda', 'cloudflare': 'in_cloudflare', 'smartermail': 'in_smartermail', 'hostinger': 'in_hostinger',
+				'ascio': 'in_ascio', 'ascio-not-cloudflare': 'in_ascio and not in_cloudflare', 'cloudflare-not-ascio': 'in_cloudflare and not in_ascio', 'expiring': `in_ascio and ascio_expires is not null and ascio_expires < now() + interval '60 days'`, 'expired': 'in_ascio and ascio_expires is not null and ascio_expires < now()', 'ascio-ns-elsewhere': `in_ascio and in_cloudflare and not (ascio_ns::text ilike '%cloudflare%')` }[gap];
 			if (g) w.push(g);
 			const sql = w.length ? 'where ' + w.join(' and ') : '';
 			const total = Number((await db.query(`select count(*)::int as n from hosted_domains ${sql}`, p))[0].n);
 			const lim = Math.min(500, Math.max(1, +limit || 200)), off = Math.max(0, +offset || 0);
-			const rows = await db.query(`select domain, in_cloudflare, cf_status, in_duda, duda_site, in_smartermail, in_hostinger, hostinger_site from hosted_domains ${sql} order by domain limit ${lim} offset ${off}`, p);
+			const order = expiryViews.has(gap) ? 'ascio_expires nulls last, domain' : 'domain';
+			const rows = await db.query(`select domain, in_cloudflare, cf_status, in_duda, duda_site, in_smartermail, in_hostinger, hostinger_site, in_ascio, ascio_status, ascio_expires, ascio_lock, ascio_ns, ascio_owner, ascio_ref from hosted_domains ${sql} order by ${order} limit ${lim} offset ${off}`, p);
 			return { total, rows };
 		},
 		/** Sites we built on Hostinger (slug.<preview domain>) that are not on the Customers board, with the real domain parked on them when the sync knows it. */
@@ -146,14 +158,17 @@ export function createHosted({ db, clients, duda, dir, ownDomains = [], previewD
 			}
 			return { created: created.map((c) => ({ slug: c.slug, name: c.name, domain: c.domain, kind: c.kind })), skipped };
 		},
-		async counts() { const r = (await db.query("select count(*)::int as total, count(*) filter (where in_cloudflare)::int as cloudflare, count(*) filter (where in_duda)::int as duda, count(*) filter (where in_smartermail)::int as smartermail, count(*) filter (where in_hostinger)::int as hostinger from hosted_domains"))[0]; return r; },
+		async counts() { const r = (await db.query("select count(*)::int as total, count(*) filter (where in_cloudflare)::int as cloudflare, count(*) filter (where in_duda)::int as duda, count(*) filter (where in_smartermail)::int as smartermail, count(*) filter (where in_hostinger)::int as hostinger, count(*) filter (where in_ascio)::int as ascio, count(*) filter (where in_ascio and ascio_expires < now() + interval '60 days')::int as expiring from hosted_domains"))[0]; return r; },
+		/** Domains registered through us that come up for renewal soon (our own included), soonest first. */
+		async expiring({ days = 60, limit = 50 } = {}) { return db.query(`select domain, ascio_expires, ascio_status, ascio_lock, in_cloudflare, in_duda, in_hostinger from hosted_domains where in_ascio and ascio_expires is not null and ascio_expires < now() + ($1 || ' days')::interval order by ascio_expires limit $2`, [String(Math.max(1, +days || 60)), Math.min(500, +limit || 50)]); },
 		/** Everything we know about one domain: where it is hosted, whether it is on the board, and its directory listing. */
 		async lookup(domainInput, store) {
 			const d = normHost(domainInput); if (!DOMAIN_RE.test(d)) throw new Error('That is not a domain name.');
 			const h = (await db.query('select * from hosted_domains where domain = $1', [d]))[0] || null;
 			const board = store ? store.list().filter((c) => normHost(c.domain) === d).map((c) => ({ id: c.id, name: c.name, type: c.kind === 'migration' ? 'DUDA migration' : 'new site' })) : [];
 			const listings = await db.query("select id, name, city, province, is_customer, outreach_status from directory where domain = $1 or email_domain = $1 order by id limit 5", [d]);
-			return { domain: d, hosted: h && { cloudflare: h.in_cloudflare ? 'yes (' + (h.cf_status || 'zone') + ')' : 'no', duda: h.in_duda ? 'yes (site ' + h.duda_site + ')' : 'no', smartermail: h.in_smartermail ? 'yes' : 'no', hostinger: h.in_hostinger ? 'yes (' + h.hostinger_site + ')' : 'no' }, on_customers_board: board, directory_listings: listings, note: h ? '' : 'Not found in the last sync of Cloudflare, DUDA, SmarterMail or Hostinger. Check the sync status: a source that failed or has not run can hide it.' };
+			const reg = h?.in_ascio ? { registrar: 'Ascio (our account)', expires: h.ascio_expires, status: h.ascio_status, transfer_lock: h.ascio_lock, nameservers: Array.isArray(h.ascio_ns) ? h.ascio_ns : [], owner: h.ascio_owner, customer_ref: h.ascio_ref } : { registrar: 'not registered through our Ascio account' };
+			return { domain: d, hosted: h && { cloudflare: h.in_cloudflare ? 'yes (' + (h.cf_status || 'zone') + ')' : 'no', duda: h.in_duda ? 'yes (site ' + h.duda_site + ')' : 'no', smartermail: h.in_smartermail ? 'yes' : 'no', hostinger: h.in_hostinger ? 'yes (' + h.hostinger_site + ')' : 'no', ascio: h.in_ascio ? 'yes (expires ' + (h.ascio_expires ? new Date(h.ascio_expires).toISOString().slice(0, 10) : 'unknown') + ')' : 'no' }, registration: h ? reg : null, on_customers_board: board, directory_listings: listings, note: h ? '' : 'Not found in the last sync of Cloudflare, DUDA, SmarterMail, Hostinger or Ascio. Check the sync status: a source that failed or has not run can hide it.' };
 		},
 	};
 	return self;

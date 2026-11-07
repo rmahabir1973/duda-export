@@ -156,6 +156,18 @@ const MIGRATIONS = [
 	create table if not exists support_log (id bigserial primary key, at timestamptz not null default now(), ticket_id bigint, action text not null, who text not null default '', detail text not null default '');
 	create index if not exists support_log_at on support_log(at desc);
 	`],
+	[7, `
+	alter table hosted_domains add column if not exists in_ascio boolean not null default false;
+	alter table hosted_domains add column if not exists ascio_handle text not null default '';
+	alter table hosted_domains add column if not exists ascio_status text not null default '';
+	alter table hosted_domains add column if not exists ascio_expires timestamptz;
+	alter table hosted_domains add column if not exists ascio_created timestamptz;
+	alter table hosted_domains add column if not exists ascio_lock text not null default '';
+	alter table hosted_domains add column if not exists ascio_ns jsonb not null default '[]'::jsonb;
+	alter table hosted_domains add column if not exists ascio_owner text not null default '';
+	alter table hosted_domains add column if not exists ascio_ref text not null default '';
+	create index if not exists hosted_domains_ascio_expires on hosted_domains(ascio_expires) where in_ascio;
+	`],
 ];
 
 /** Applies any migration not yet applied. Safe to run on every start. */
