@@ -16,6 +16,14 @@ export const depMet = (s) => SATISFIED.has(s) || s === 'unknown';
 const memo = (ctx, k, fn) => { ctx.memo ||= {}; if (!(k in ctx.memo)) ctx.memo[k] = fn(); return ctx.memo[k]; };
 const tempHost = (ch, cfg) => `${ch.slug}.${cfg.previewDomain}`;
 const hostOnly = (u) => String(u || '').replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase();
+/** WordPress stores the site title HTML-escaped ("Yoga &amp; Fitness", "St. Paul&#039;s"), so compare titles after undoing that. */
+const ENT = { amp: '&', lt: '<', gt: '>', quot: '"', apos: '\'', nbsp: ' ' };
+const unescapeHtml = (s) => String(s || '').replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e) => {
+	const k = e.toLowerCase();
+	if (k[0] === '#') { const cp = k[1] === 'x' ? parseInt(k.slice(2), 16) : parseInt(k.slice(1), 10); return Number.isFinite(cp) ? String.fromCodePoint(cp) : m; }
+	return k in ENT ? ENT[k] : m;
+});
+export const sameTitle = (a, b) => unescapeHtml(a).replace(/\s+/g, ' ').trim() === unescapeHtml(b).replace(/\s+/g, ' ').trim();
 
 /* ---- where a site lives on the Hostinger account (looked for over SSH, in the usual places) */
 const resolved = new Map();
@@ -435,7 +443,7 @@ export const STAGES = [
 			},
 			{
 				id: 'title', label: 'Does the site have the church\'s name?', services: ['ssh'], deps: ['folder'], fixLabel: 'Set the name',
-				test: (ctx, ch) => onSite(ctx, ch, async (h) => { const t = await wpGet(ctx, h, 'option get blogname'); return t === ch.name ? ok(t) : no(`The site title is "${t || ''}".`); }),
+				test: (ctx, ch) => onSite(ctx, ch, async (h) => { const t = await wpGet(ctx, h, 'option get blogname'); return t !== null && sameTitle(t, ch.name) ? ok(unescapeHtml(t)) : no(`The site title is "${unescapeHtml(t)}".`); }),
 				fix: (ctx, ch) => fixOnSite(ctx, ch, [handCmd(ctx, ch, `option update blogname ${shq(ch.name)}`)], async (h) => {
 					const r = await wpRun(ctx, h, `option update blogname ${shq(ch.name)}`);
 					return r.code ? { ok: false, detail: r.err.trim().slice(-300) } : { ok: true, detail: 'Name set.' };

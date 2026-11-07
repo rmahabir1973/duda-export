@@ -530,3 +530,12 @@ test('team Editor login: with no STAFF_LOGIN_PASSWORD set it explains what to se
 	const out = await fixReq(ctxOf(f), ch, stage, stage.reqs.find((x) => x.id === 'teamLogin'), t.teamLogin);
 	assert.equal(out.ok, false); assert.ok(!f.calls.ssh.some((c) => /user create|user update/.test(c)));
 });
+
+import { sameTitle } from '../deploy/checks.mjs';
+test('site title check tolerates the HTML escaping WordPress applies to blogname', () => {
+	assert.ok(sameTitle('Oxygen Yoga &amp; Fitness', 'Oxygen Yoga & Fitness'));
+	assert.ok(sameTitle('St. Paul&#039;s United', "St. Paul's United"));
+	assert.ok(sameTitle('Grace &quot;Community&quot; Church', 'Grace "Community" Church'));
+	assert.ok(sameTitle('Knox  United', 'Knox United'));
+	assert.ok(!sameTitle('Knox United', 'Knox Presbyterian'));
+});
