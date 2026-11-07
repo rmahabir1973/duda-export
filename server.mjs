@@ -26,6 +26,8 @@ import { createHosted, makeDudaMcp } from './portal/hosted.mjs';
 import { hostedRouter } from './portal/hostedRoutes.mjs';
 import { makeWhmcsClient, createWhmcs, SUPPORT_ACTIONS } from './portal/whmcs.mjs';
 import { whmcsRouter } from './portal/whmcsRoutes.mjs';
+import { createRegistrar } from './portal/registrar.mjs';
+import { registrarRouter } from './portal/registrarRoutes.mjs';
 import { createSupport } from './portal/support.mjs';
 import { supportRouter } from './portal/supportRoutes.mjs';
 import { createAnalytics, makeGa4 } from './portal/analytics.mjs';
@@ -385,6 +387,7 @@ if (hosted) {
 	const hours = Number(env.HOSTED_SYNC_HOURS ?? 6);
 	if (hours > 0) { const run = () => hosted.sync().then((r) => console.log('hosted sync:', Object.entries(r).map(([k, v]) => `${k} ${v.ok ? v.count : 'failed'}`).join(', '))).catch((e) => console.error('hosted sync:', e.message)); setTimeout(run, 45000).unref(); setInterval(run, hours * 3600 * 1000).unref(); }
 }
+let registrar = null;
 const whmcsCfg = { url: (env.WHMCS_URL || '').trim(), accessKey: (env.WHMCS_ACCESS_KEY || '').trim() };
 const whmcsClient = makeWhmcsClient({ ...whmcsCfg, identifier: (env.WHMCS_API_IDENTIFIER || env.WHMCS_API_ID || '').trim(), secret: (env.WHMCS_API_SECRET || '').trim() });
 const whmcs = portal && portalDb ? createWhmcs({ db: portalDb, whmcs: whmcsClient }) : null;
@@ -392,6 +395,13 @@ if (whmcs) {
 	app.use('/api/whmcs', whmcsRouter({ need, whmcs, audit: portal.audit }));
 	const wh = Number(env.WHMCS_SYNC_HOURS ?? 12);
 	if (wh > 0 && whmcs.available()) { const run = () => whmcs.sync().then((r) => console.log('whmcs sync:', r.ok ? `${r.clients} clients, ${r.services} services, ${r.invoices} invoices` : 'failed')).catch((e) => console.error('whmcs sync:', e.message)); setTimeout(run, 90000).unref(); setInterval(run, wh * 3600 * 1000).unref(); }
+}
+if (hosted && portal && portalDb) {
+	registrar = createRegistrar({ db: portalDb, hosted, store: deployStore, whmcs, notify: deployClients.cfg.postmarkServerToken ? ({ to, subject, text }) => deployClients.postmark.sendEmail({ From: supportFrom, To: to.join(','), Subject: subject, TextBody: text, MessageStream: 'outbound' }) : null, alertTo: lines(env.DOMAIN_ALERT_TO || env.PROSPECT_ALERT_TO || env.SUPPORT_ESCALATE_TO), baseUrl: (env.PORTAL_URL || 'https://portal.churchwebglobal.com').replace(/\/$/, ''), ownDomains: (env.OWN_DOMAINS || 'churchwebglobal.com,churchwebsupport.com').split(',').map((x) => x.trim()).filter(Boolean), previewDomain: deployClients.cfg.previewDomain });
+	app.use('/api/registrar', registrarRouter({ need, registrar, audit: portal.audit }));
+	// renewal alerts: after each Domains sync has had time to finish, and once a day regardless
+	const ah = Number(env.DOMAIN_ALERT_HOURS ?? 24);
+	if (ah > 0 && deployClients.ascio.available()) { const run = () => registrar.checkAlerts().then((r) => r.found && console.log('registrar alerts:', `${r.found} domain(s) entering a renewal window${r.sent ? ', email sent' : ''}`)).catch((e) => console.error('registrar alerts:', e.message)); setTimeout(run, 8 * 60000).unref(); setInterval(run, ah * 3600 * 1000).unref(); }
 }
 let analytics = null;
 if (portal && portalDb) {
@@ -401,7 +411,7 @@ if (portal && portalDb) {
 }
 let assistant = null, support = null;
 if (portal) {
-	assistant = createAssistant({ tools: buildTools({ store: deployStore, clients: deployClients, dir: portal.dir, outreach, audit: portal.audit, hosted, whmcs, analytics, getSupport: () => support }), audit: portal.audit, clients: deployClients, env });
+	assistant = createAssistant({ tools: buildTools({ store: deployStore, clients: deployClients, dir: portal.dir, outreach, audit: portal.audit, hosted, whmcs, analytics, registrar, getSupport: () => support }), audit: portal.audit, clients: deployClients, env });
 	app.use('/api/assistant', assistantRouter({ need, assistant }));
 }
 if (portal && portalDb && assistant) {
@@ -421,6 +431,7 @@ app.get('/customers', page('customers.html'));
 app.get('/directory', page('directory.html', { dbOnly: true }));
 app.get('/activity', page('activity.html', { dbOnly: true }));
 app.get('/domains', page('domains.html', { dbOnly: true }));
+app.get('/registrar', page('registrar.html', { dbOnly: true }));
 app.get('/whmcs', page('whmcs.html', { dbOnly: true }));
 app.get('/support', page('support.html', { dbOnly: true }));
 app.get('/analytics', page('analytics.html', { dbOnly: true }));

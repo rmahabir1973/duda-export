@@ -168,6 +168,10 @@ const MIGRATIONS = [
 	alter table hosted_domains add column if not exists ascio_ref text not null default '';
 	create index if not exists hosted_domains_ascio_expires on hosted_domains(ascio_expires) where in_ascio;
 	`],
+	[8, `
+	create table if not exists registrar_actions (domain text primary key, decision text not null default '', note text not null default '', by text not null default '', at timestamptz not null default now());
+	create table if not exists registrar_alerts (domain text not null, window_days int not null, expires timestamptz, at timestamptz not null default now(), primary key (domain, window_days));
+	`],
 ];
 
 /** Applies any migration not yet applied. Safe to run on every start. */

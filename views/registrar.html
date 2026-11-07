@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Registrar · ChurchWeb Portal</title><meta name="robots" content="noindex,nofollow"><link rel="stylesheet" href="/assets/style.css"></head>
+<body><header id="topbar"></header><script src="/assets/nav.js"></script>
+<main class="wide"><section class="card"><h2>Registrar (Ascio)</h2><p class="hint">Every live domain registered through our Ascio account, soonest renewal first. Deleted, transferred and already-expired registrations are left out. Record a decision for each one that is coming up; the team gets one email per domain when it enters the 60, 30, 14, 7 and 1-day windows.</p>
+<div id="banner"></div>
+<div class="statgrid" id="stats"></div>
+<div class="btns"><button class="sm" id="sync" type="button">Sync from Ascio now</button><button class="sm" id="check" type="button">Check alerts now</button><span class="hint" id="msg"></span></div>
+<div class="filterbar"><input id="q" type="search" placeholder="Search a domain, owner or customer reference"><select id="window"><option value="90">Renewing within 90 days</option><option value="60">Within 60 days</option><option value="30">Within 30 days</option><option value="7">Within 7 days</option><option value="0">All live registrations</option></select><select id="decision"><option value="any">Any decision</option><option value="">No decision yet</option><option value="renewing">Renewing</option><option value="contact">Contact the church</option><option value="expire">Let it expire</option></select></div>
+<div class="tablewrap"><table class="dirtable" style="min-width:0"><thead><tr><th>Domain</th><th>Expires</th><th>Owner / WHMCS client</th><th>What we host</th><th>Lock · nameservers</th><th>Decision</th><th>Note</th></tr></thead><tbody id="rows"></tbody></table></div>
+<div class="pager"><button class="sm" id="prev">← Previous</button><span id="page"></span><button class="sm" id="next">Next →</button></div><p class="err" id="err"></p>
+</section></main>
+<script src="/assets/registrar.js"></script></body></html>

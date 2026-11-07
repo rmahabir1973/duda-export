@@ -21,7 +21,7 @@ export function compactForModel(v, depth = 0) {
 	return out;
 }
 
-export function buildTools({ store, clients, dir, outreach, audit, hosted, whmcs, analytics, getSupport = () => null }) {
+export function buildTools({ store, clients, dir, outreach, audit, hosted, whmcs, analytics, registrar = null, getSupport = () => null }) {
 	const ctxFor = () => ({ c: clients, configured: configured(clients.cfg), memo: {}, facts: null, secret: null });
 	const need = (id) => { const c = store.get(id); if (!c) throw new Error(`No customer with id "${id}". Use list_customers to see the ids.`); return c; };
 	const stageSummary = (ch, s, results) => ({ stage: s.key, title: s.title, tasks: reqsFor(s, ch).map((q) => ({ id: q.id, task: q.label, state: results?.[q.id]?.state || 'not checked', detail: trim(results?.[q.id]?.detail, 240) })) });
@@ -82,10 +82,21 @@ export function buildTools({ store, clients, dir, outreach, audit, hosted, whmcs
 			},
 			{
 				name: 'domains_expiring', kind: 'read',
-				description: 'Domains registered through our Ascio account whose renewal is due within N days (default 60), soonest first, our own domains included. Use for "what expires this month", "any renewals due", "is X about to expire".',
-				input_schema: { type: 'object', properties: { days: { type: 'integer', description: 'Look-ahead window in days, 1-365. Default 60.' } } },
-				run: async ({ days }) => { const rows = await hosted.expiring({ days: Math.min(365, Math.max(1, +days || 60)), limit: 100 }); const st = await hosted.status(); return { window_days: Math.min(365, Math.max(1, +days || 60)), count: rows.length, ascio_last_sync: st.sources.ascio ? (st.sources.ascio.ok ? st.sources.ascio.at : 'FAILED: ' + st.sources.ascio.error) : (st.configured.ascio ? 'never run' : 'Ascio is not set up'), domains: rows.map((r) => ({ domain: r.domain, expires: r.ascio_expires, status: r.ascio_status, transfer_lock: r.ascio_lock, dns_in_cloudflare: r.in_cloudflare, site_on_duda: r.in_duda, site_on_hostinger: r.in_hostinger })) }; },
+				description: 'Live domains registered through our Ascio account coming up for renewal within N days (default 60), soonest first, with each one\'s decision (renewing, contact the church, let it expire, or none yet), the WHMCS client and what else we host for it. Deleted, transferred and already-expired registrations are left out. Use for "what expires this month", "any renewals due", "is X about to expire", "which renewals have no decision".',
+				input_schema: { type: 'object', properties: { days: { type: 'integer', description: 'Look-ahead window in days, 1-400. Default 60.' }, decision: { type: 'string', description: 'any (default), none (no decision yet), renewing, contact, expire' } } },
+				run: async ({ days, decision }) => {
+					if (!registrar) return { error: 'The Registrar tab is not set up on this server.' };
+					const win = Math.min(400, Math.max(1, +days || 60)), dec = { none: '', renewing: 'renewing', contact: 'contact', expire: 'expire' }[decision] ?? 'any';
+					const [r, sum] = [await registrar.list({ window: win, decision: dec, limit: 100 }), await registrar.summary()];
+					return { window_days: win, count: r.total, live_registrations: sum.live, ascio_last_sync: sum.ascio ? (sum.ascio.ok ? sum.ascio.at : 'FAILED: ' + sum.ascio.error) : (sum.configured ? 'never run' : 'Ascio is not set up'), portal_page: '/registrar', domains: r.rows.map((x) => ({ domain: x.domain, expires: x.ascio_expires, days_left: x.days, decision: registrar.DECISIONS[x.decision], note: x.note || undefined, whmcs_client: x.whmcs?.client, on_board: x.board?.name, dns_in_cloudflare: x.in_cloudflare, site: x.in_duda ? 'DUDA' : x.in_hostinger ? 'Hostinger' : 'none with us', email_with_us: x.in_smartermail, our_own_domain: x.own || undefined })) };
+				},
 			},
+			...(registrar ? [{
+				name: 'registrar_decide', kind: 'write',
+				description: 'Record the decision for a domain renewal on the Registrar tab: renewing, contact (contact the church), expire (let it expire), or an empty decision to clear it. Add a short note. Only after the person has clearly asked for it.',
+				input_schema: { type: 'object', properties: { domain: { type: 'string' }, decision: { type: 'string', enum: ['', 'renewing', 'contact', 'expire'] }, note: { type: 'string' } }, required: ['domain', 'decision'] },
+				run: async ({ domain, decision, note }, by) => registrar.decide(domain, { decision, note }, by || 'assistant'),
+			}] : []),
 		] : []),
 		{ name: 'outreach_stats', kind: 'read', description: 'Prospect email results for the last 30 days (sent, delivered, opened, clicked, bounced, unsubscribed) and today\'s sending allowance.', input_schema: { type: 'object', properties: {} }, run: async () => (outreach ? outreach.stats() : { error: 'Outreach is not set up.' }) },
 

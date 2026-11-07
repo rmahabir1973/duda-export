@@ -9,7 +9,7 @@
 		{ label: 'Customers', pages: [['/customers', 'Customers'], ['/email', 'Email setup']] },
 		{ label: 'Directory', lvl: 'acct', pages: [['/directory', 'Directory']] },
 		{ label: 'Users', lvl: 'admin', pages: [['/users', 'Users']] },
-		{ label: 'Support', lvl: 'acct', pages: [['/support', 'Support'], ['/domains', 'Domains', 'acct'], ['/analytics', 'Analytics', 'admin'], ['/whmcs', 'WHMCS', 'admin'], ['/activity', 'Activity', 'acct']] },
+		{ label: 'Support', lvl: 'acct', pages: [['/support', 'Support'], ['/registrar', 'Registrar', 'acct'], ['/domains', 'Domains', 'acct'], ['/analytics', 'Analytics', 'admin'], ['/whmcs', 'WHMCS', 'admin'], ['/activity', 'Activity', 'acct']] },
 	];
 	const here = location.pathname.replace(/\/$/, '') || '/';
 	const groupHere = GROUPS.find((g) => g.pages.some((p) => p[0] === here));
@@ -33,5 +33,10 @@
 		if (me.user.mustChange && here !== '/account') location.href = '/account';
 		window.PORTAL_ME = me;
 		if (me.mode === 'accounts' && !me.user.mustChange) { const sc = document.createElement('script'); sc.src = '/assets/assistant.js'; document.body.appendChild(sc); }
+		if (me.mode === 'accounts') fetch('/api/registrar/summary', { headers: H }).then((r) => (r.ok ? r.json() : null)).then((s) => {
+			if (!s || !s.d30) return;
+			const dot = (el) => { if (el && !el.querySelector('.navdot')) el.insertAdjacentHTML('beforeend', ` <span class="navdot" title="${s.d30} domain renewal${s.d30 === 1 ? '' : 's'} due within 30 days">${s.d30}</span>`); };
+			dot([...bar.querySelectorAll('.tab-top')].find((a) => a.textContent.trim() === 'Support')); dot([...sub.querySelectorAll('a')].find((a) => a.getAttribute('href') === '/registrar'));
+		}).catch(() => {});
 	}).catch(() => {});
 })();
