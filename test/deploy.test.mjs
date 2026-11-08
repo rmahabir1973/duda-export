@@ -26,6 +26,9 @@ function fakes(over = {}) {
 		const ok = (out = '') => ({ code: 0, out, err: '' }), bad = (err = 'error') => ({ code: 1, out: '', err });
 		let x;
 		if (/^plugin list --fields=name,title,status/.test(a)) return ok(JSON.stringify(wpState.plugins || []));
+		if (/^option list --search='\*maintenance\*'/.test(a)) return ok(JSON.stringify(Object.entries(wpState.opts || {}).filter(([k]) => /maintenance/.test(k)).map(([k, v]) => ({ option_name: k, option_value: v }))));
+		if ((x = /^option update '([^']+)' 0 /.exec(a))) { (wpState.opts ||= {})[x[1]] = '0'; return ok(); }
+		if (/^(cache flush|litespeed-purge)/.test(a)) return ok();
 		if ((x = /^plugin deactivate ((?:'[^']+' ?)+)/.exec(a))) { for (const n of x[1].match(/'([^']+)'/g).map((v) => v.slice(1, -1))) { const p = (wpState.plugins || []).find((q) => q.name === n); if (p) p.status = 'inactive'; } return ok(); }
 		if ((x = /^plugin delete ((?:'[^']+' ?)+)/.exec(a))) { if (over.deleteFails) return bad('Error: could not delete'); const gone = x[1].match(/'([^']+)'/g).map((v) => v.slice(1, -1)); wpState.plugins = (wpState.plugins || []).filter((q) => !gone.includes(q.name)); return ok(); }
 		if ((x = /^user get '([^']+)' --field=(roles|ID)/.exec(a))) { const u = (wpState.wpUsers ||= {})[x[1]]; return u ? ok(x[2] === 'roles' ? u.role : '9') : bad('Error: Invalid user'); }
@@ -100,7 +103,7 @@ test('slugify, store, shell quoting, SPF merge', () => {
 test('stage 1 tests: a fresh church shows what is missing, and later items wait for earlier ones', async () => {
 	const f = fakes(); const ch = createStore(tmp()).create({ name: 'Grace Church' });
 	const st = states(await testStage(ctxOf(f), ch, stageByKey('preview')));
-	assert.deepEqual(st, { site: 'ok', folder: 'ok', dns: 'no', plugins: 'no', plugin: 'blocked', hostingerPlugins: 'ok', staffview: 'blocked', teamLogin: 'blocked', connected: 'blocked', address: 'no', title: 'no', preview: 'blocked', oxygen: 'no' });
+	assert.deepEqual(st, { site: 'ok', folder: 'ok', dns: 'no', plugins: 'no', plugin: 'blocked', hostingerPlugins: 'ok', comingSoon: 'ok', staffview: 'blocked', teamLogin: 'blocked', connected: 'blocked', address: 'no', title: 'no', preview: 'blocked', oxygen: 'no' });
 	assert.ok(f.calls.ssh.every((c) => !/config set|option update|search-replace|plugin activate/.test(c)), 'testing never changes anything');
 });
 
@@ -148,7 +151,7 @@ test('"fix everything" repairs stage 1 in order, never leaks the key, and re-tes
 		let r = await t.j('/churches/grace-church/stages/preview/fix', 'POST', { req: 'all' }); assert.equal(r.s, 400, 'must confirm');
 		r = await t.j('/churches/grace-church/stages/preview/fix', 'POST', { req: 'all', confirm: true }); assert.equal(r.s, 200);
 		const res = r.j.church.stageStates.preview.results;
-		assert.deepEqual(states(res), { site: 'ok', folder: 'ok', dns: 'ok', plugins: 'ok', plugin: 'ok', hostingerPlugins: 'ok', staffview: 'ok', teamLogin: 'ok', connected: 'ok', address: 'ok', title: 'ok', preview: 'ok', oxygen: 'no' });
+		assert.deepEqual(states(res), { site: 'ok', folder: 'ok', dns: 'ok', plugins: 'ok', plugin: 'ok', hostingerPlugins: 'ok', comingSoon: 'ok', staffview: 'ok', teamLogin: 'ok', connected: 'ok', address: 'ok', title: 'ok', preview: 'ok', oxygen: 'no' });
 		assert.equal(f.wpState.cfg.CWAI_API_KEY, 'cwai_grace-church_SECRETTOKEN');
 		assert.equal(f.wpState.siteurl, 'https://grace-church.churchwebglobal.com');
 		assert.equal(f.wpState.blogname, 'Grace Church'); assert.equal(f.wpState.blog_public, '0');
@@ -422,7 +425,7 @@ test('a brand-new customer: creates the site on Hostinger, installs WordPress, c
 		assert.equal(wp[2].credentials.login, 'cwadmin'); assert.equal(wp[2].credentials.email, 'ops@example.com'); assert.ok(wp[2].credentials.password.length >= 16);
 		assert.equal(r.j.secret.password, wp[2].credentials.password, 'the new site login is shown once');
 		assert.ok(!JSON.stringify(t.store.get('grace-church')).includes(wp[2].credentials.password), 'and never stored');
-		assert.deepEqual(states(r.j.church.stageStates.preview.results), { site: 'ok', folder: 'ok', dns: 'ok', plugins: 'ok', plugin: 'ok', hostingerPlugins: 'ok', staffview: 'ok', teamLogin: 'unknown', connected: 'ok', address: 'ok', title: 'ok', preview: 'ok', oxygen: 'no' });
+		assert.deepEqual(states(r.j.church.stageStates.preview.results), { site: 'ok', folder: 'ok', dns: 'ok', plugins: 'ok', plugin: 'ok', hostingerPlugins: 'ok', comingSoon: 'ok', staffview: 'ok', teamLogin: 'unknown', connected: 'ok', address: 'ok', title: 'ok', preview: 'ok', oxygen: 'no' });
 		assert.deepEqual(f.wpState.activePlugins.filter((x) => x.startsWith('copied:')).sort(), ['copied:churchweb-ai-assistant', 'copied:oxygen', 'copied:seo-by-rank-math']);
 	} finally { t.close(); }
 });
@@ -538,4 +541,13 @@ test('site title check tolerates the HTML escaping WordPress applies to blogname
 	assert.ok(sameTitle('Grace &quot;Community&quot; Church', 'Grace "Community" Church'));
 	assert.ok(sameTitle('Knox  United', 'Knox United'));
 	assert.ok(!sameTitle('Knox United', 'Knox Presbyterian'));
+});
+
+test('Hostinger "Coming soon" mode: detected from the site options and cleared by the fix, even when the plugin is gone', async () => {
+	const f = fakes({ wp: { opts: { hostinger_maintenance_mode: '1', some_other_maintenance_flag: '1' } } }); const ch = createStore(tmp()).create({ name: 'Grace Church' });
+	const stage = stageByKey('preview'), req = stage.reqs.find((q) => q.id === 'comingSoon'); assert.ok(req, 'the preview stage has the check');
+	const t = await testStage(ctxOf(f), ch, stage);
+	assert.equal(t.comingSoon.state, 'no'); assert.match(t.comingSoon.detail, /hostinger_maintenance_mode/); assert.doesNotMatch(t.comingSoon.detail, /some_other/, 'only Hostinger-style flags count');
+	const out = await fixReq(ctxOf(f), ch, stage, req, t.comingSoon); assert.equal(out.ok, true); assert.equal(f.wpState.opts.hostinger_maintenance_mode, '0'); assert.equal(f.wpState.opts.some_other_maintenance_flag, '1');
+	assert.equal((await testStage(ctxOf(f), ch, stage)).comingSoon.state, 'ok');
 });

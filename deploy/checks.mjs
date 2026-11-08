@@ -51,6 +51,8 @@ const siteOf = (ctx, ch) => memo(ctx, 'site', async () => {
 const wpRun = (ctx, host, args) => ctx.c.ssh.exec(`cd ${sitePath(ctx.c.cfg, host)} && ${ctx.c.cfg.wpCli} ${args}`);
 const wpGet = async (ctx, host, args) => { const r = await wpRun(ctx, host, args); return r.code === 0 ? r.out.trim() : null; };
 /** Plugins made by Hostinger (matched on slug or title), or null if the list can't be read. */
+/** Site options that put Hostinger's "Coming soon" page in front of WordPress, when they are switched on. */
+const maintenanceOptions = async (ctx, h) => { const t = await wpGet(ctx, h, `option list --search='*maintenance*' --fields=option_name,option_value --format=json --skip-plugins --skip-themes`); if (t === null) return null; try { return JSON.parse(t).filter((o) => /hostinger|^hts_|coming/i.test(o.option_name) && !['0', '', 'false', 'off', 'no'].includes(String(o.option_value).trim().toLowerCase())).map((o) => o.option_name); } catch { return null; } };
 const hostingerPlugins = async (ctx, h) => { const t = await wpGet(ctx, h, 'plugin list --fields=name,title,status --format=json --skip-plugins --skip-themes'); if (t === null) return null; try { return JSON.parse(t).filter((p) => /hostinger/i.test(p.name) || /hostinger/i.test(p.title || '')); } catch { return null; } };
 const handCmd = (ctx, ch, args) => `cd ${sitePath(ctx.c.cfg, tempHost(ch, ctx.c.cfg))} && ${ctx.c.cfg.wpCli} ${args}`;
 
@@ -376,6 +378,26 @@ export const STAGES = [
 					return { ok: !failed.length, detail: `Removed ${l.length - failed.length} Hostinger plugin(s).${failed.length ? ' Couldn\'t delete: ' + failed.join(', ') : ''}` };
 				}),
 				howTo: () => 'In WordPress → Plugins, deactivate and delete every plugin made by Hostinger (Hostinger AI, Hub, Preview Domain, Reach, Smart Auto Updates, Tools).',
+			},
+			{
+				id: 'comingSoon', label: 'Is Hostinger\'s "Coming soon" page switched off?', services: ['ssh'], deps: ['folder'], fixLabel: 'Switch it off',
+				// Hostinger's plugin ships new sites in "maintenance mode": visitors get a "Coming soon · Hosted by Hostinger" page instead of WordPress. The option outlives the plugin, so it is cleared whether or not the plugin is still installed.
+				test: (ctx, ch) => onSite(ctx, ch, async (h) => {
+					const on = await maintenanceOptions(ctx, h); if (on === null) return unk('Couldn\'t read the site options.');
+					if (on.length) return no(`Maintenance mode is on (${on.join(', ')}), so visitors see Hostinger's "Coming soon" page.`);
+					try { const r = await ctx.c.http.get(`https://${h}/`); if (r && /Hosted by\s*<[^>]*>?\s*Hostinger/i.test(r.text || '') && /Coming soon/i.test(r.text || '')) return no('The site still serves Hostinger\'s "Coming soon" page.'); } catch { /* the front page is checked best-effort */ }
+					return ok('Visitors reach WordPress.');
+				}),
+				fix: (ctx, ch) => fixOnSite(ctx, ch, [handCmd(ctx, ch, 'option update hostinger_maintenance_mode 0 --skip-plugins --skip-themes')], async (h) => {
+					const on = await maintenanceOptions(ctx, h); if (on === null) return { ok: false, detail: 'Couldn\'t read the site options.' };
+					const fast = '--skip-plugins --skip-themes', names = on.length ? on : ['hostinger_maintenance_mode'];
+					for (const n of names) await wpRun(ctx, h, `option update ${shq(n)} 0 ${fast}`);
+					const hp = await hostingerPlugins(ctx, h); if (hp && hp.length) await wpRun(ctx, h, `plugin deactivate ${hp.map((p) => shq(p.name)).join(' ')} ${fast}`);
+					await wpRun(ctx, h, `cache flush ${fast}`); try { await wpRun(ctx, h, `litespeed-purge all ${fast}`); } catch { /* not every site has LiteSpeed */ }
+					const left = await maintenanceOptions(ctx, h);
+					return { ok: !left || !left.length, detail: left && left.length ? `Still on: ${left.join(', ')}` : `Maintenance mode cleared (${names.join(', ')}).${hp && hp.length ? ' Hostinger plugins deactivated.' : ''}` };
+				}),
+				howTo: () => 'In WordPress → Hostinger → Maintenance mode, switch it off; or run: wp option update hostinger_maintenance_mode 0',
 			},
 			{
 				id: 'staffview', label: 'Is the simple staff view switched on?', services: ['ssh'], deps: ['plugin'], fixLabel: 'Turn it on',
