@@ -436,12 +436,14 @@ export const STAGES = [
 					return (await ctx.c.gateway.tokenWorks(want)) ? ok('Key accepted by the gateway.') : no('The gateway doesn\'t accept the key (is this church switched off?).');
 				}),
 				fix: (ctx, ch) => fixOnSite(ctx, ch, [handCmd(ctx, ch, `config set CWAI_API_KEY '<key from the gateway>' --type=constant`), handCmd(ctx, ch, `config set CWAI_API_BASE_URL ${shq(ctx.c.cfg.gatewayUrl)} --type=constant`)], async (h) => {
-					const cfg = ctx.c.cfg, token = (await ctx.c.gateway.mint(ch.slug)).token;
+					const cfg = ctx.c.cfg, minted = await ctx.c.gateway.mint(ch.slug), token = minted.token;
+					// A church deleted and added again gets its old key back, switched off. Connecting it means switching it on again.
+					let switchedOn = false; if (minted.revoked) { await ctx.c.gateway.revoke(ch.slug, false); switchedOn = true; }
 					if (cfg.defaultTokenCap || cfg.defaultImageCap) await ctx.c.gateway.setCap(ch.slug, cfg.defaultTokenCap, cfg.defaultImageCap);
 					const a = await wpRun(ctx, h, `config set CWAI_API_KEY ${shq(token)} --type=constant`);
 					const b = await wpRun(ctx, h, `config set CWAI_API_BASE_URL ${shq(cfg.gatewayUrl)} --type=constant`);
 					if (a.code || b.code) return { ok: false, detail: (a.err || b.err || '').replace(token, '••••').trim().slice(-300) };
-					return { ok: true, detail: 'Key created and written to the site.' };
+					return { ok: true, detail: `Key ${switchedOn ? 'switched back on at the gateway and' : 'created and'} written to the site.` };
 				}),
 			},
 			{

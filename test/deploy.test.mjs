@@ -52,7 +52,7 @@ function fakes(over = {}) {
 	};
 	const c = {
 		cfg: { ...baseCfg, ...(over.cfg || {}) },
-		gateway: { available: () => true, mint: async (s) => (calls.gw.push(['mint', s]), { site: s, token: 'cwai_' + s + '_SECRETTOKEN', revoked: false }), site: async () => ({ revoked: !!over.revoked, caps: { tokens: 5000 } }), setCap: async (...a) => calls.gw.push(['cap', ...a]), revoke: async (...a) => { calls.gw.push(['revoke', ...a]); over.revoked = a[1]; }, tokenWorks: async () => true },
+		gateway: { available: () => true, mint: async (s) => (calls.gw.push(['mint', s]), { site: s, token: 'cwai_' + s + '_SECRETTOKEN', revoked: !!over.revoked }), site: async () => ({ revoked: !!over.revoked, caps: { tokens: 5000 } }), setCap: async (...a) => calls.gw.push(['cap', ...a]), revoke: async (...a) => { calls.gw.push(['revoke', ...a]); over.revoked = a[1]; }, tokenWorks: async () => !over.revoked },
 		cloudflare: {
 			available: () => true,
 			zoneByName: async (d) => zones.get(d) || null,
@@ -550,4 +550,12 @@ test('Hostinger "Coming soon" mode: detected from the site options and cleared b
 	assert.equal(t.comingSoon.state, 'no'); assert.match(t.comingSoon.detail, /hostinger_maintenance_mode/); assert.doesNotMatch(t.comingSoon.detail, /some_other/, 'only Hostinger-style flags count');
 	const out = await fixReq(ctxOf(f), ch, stage, req, t.comingSoon); assert.equal(out.ok, true); assert.equal(f.wpState.opts.hostinger_maintenance_mode, '0'); assert.equal(f.wpState.opts.some_other_maintenance_flag, '1');
 	assert.equal((await testStage(ctxOf(f), ch, stage)).comingSoon.state, 'ok');
+});
+
+test('a church deleted and added again: its gateway key comes back switched off, and "Connect it" switches it on', async () => {
+	const f = fakes({ revoked: true, wp: { active: true, activePlugins: ['copied:churchweb-ai-assistant'] } }); const ch = createStore(tmp()).create({ name: 'Grace Church' });
+	const stage = stageByKey('preview'), req = stage.reqs.find((q) => q.id === 'connected');
+	const out = await fixReq(ctxOf(f), ch, stage, req, { state: 'no' }); assert.equal(out.ok, true); assert.match(out.detail, /switched back on/);
+	assert.ok(f.calls.gw.some((c) => c[0] === 'revoke' && c[1] === ch.slug && c[2] === false), 'the gateway was told to switch the key on');
+	const t = await req.test(ctxOf(f), ch); assert.equal(t.state, 'ok', t.detail);
 });
