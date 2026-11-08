@@ -567,3 +567,9 @@ test('a site Hostinger lists as PHP/HTML fails the WordPress check even when old
 	const out = await fixReq(ctxOf(f), { ...ch, contactEmail: 'office@grace.ca' }, stage, req, t); assert.equal(out.ok, true);
 	assert.ok((f.calls.hst || []).some((c) => c[0] === 'wp'), 'Hostinger was asked to install WordPress');
 });
+
+test('configFromEnv reads every Hostinger and preview setting (guards against a comment swallowing the rest of a line)', () => {
+	const c = configFromEnv({ HOSTINGER_API_KEY: 'k', HOSTINGER_SSH_HOST: 'h', PREVIEW_DOMAIN: 'x.com', WP_ADMIN_EMAIL: '' });
+	assert.equal(c.hostingerApiKey, 'k'); assert.equal(c.hostingerApiBase, 'https://developers.hostinger.com'); assert.equal(c.wpAdminEmail, 'support@x.com');
+	assert.equal(configFromEnv({ WP_ADMIN_EMAIL: 'me@y.ca' }).wpAdminEmail, 'me@y.ca');
+});
