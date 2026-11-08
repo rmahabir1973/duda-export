@@ -305,9 +305,12 @@ export const STAGES = [
 			{
 				id: 'folder', label: 'Is WordPress installed on it?', services: ['hostingerApi'], deps: ['site'], fixLabel: 'Install WordPress',
 				async test(ctx, ch) {
+					// Hostinger's own record is the truth: a site it lists as PHP/HTML serves its "Coming soon" placeholder even when WordPress files are left on disk from an earlier, deleted install.
+					const host = tempHost(ch, ctx.c.cfg), w = await siteRecord(ctx, host), type = String(w?.website_type || '').toLowerCase();
+					if (w && type && !/wordpress|wp/.test(type)) return no(`Hostinger has ${host} as a "${w.website_type}" site, not WordPress, so visitors get Hostinger's placeholder. Install WordPress on it.`);
 					const s = await siteOf(ctx, ch);
 					if (s.unavailable) return unk('Can\'t look: Hostinger SSH isn\'t set up on this server yet.');
-					return s.missing ? no(`No WordPress found in ${tempHost(ch, ctx.c.cfg)} yet.`) : ok(s.host);
+					return s.missing ? no(`No WordPress found in ${host} yet.`) : ok(s.host);
 				},
 				async fix(ctx, ch) {
 					const cfg = ctx.c.cfg, host = tempHost(ch, cfg), email = ch.contactEmail || cfg.wpAdminEmail;

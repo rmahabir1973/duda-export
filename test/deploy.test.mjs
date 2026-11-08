@@ -74,7 +74,7 @@ function fakes(over = {}) {
 		ssh: { available: () => !over.noSsh, exec },
 		hostinger: {
 			available: () => !over.noHostingerApi,
-			websites: async () => [...sites].map((d) => ({ domain: d, username: 'u1', order_id: 5, website_type: 'wordpress' })),
+			websites: async () => [...sites].map((d) => ({ domain: d, username: 'u1', order_id: 5, website_type: (over.siteTypes || {})[d] || 'wordpress' })),
 			account: async () => ({ username: 'u1', order_id: 5 }),
 			createWebsite: async (d, o) => { calls.hst = calls.hst || []; calls.hst.push(['create', d, o]); sites.add(d); },
 			installWordPress: async (u, b) => { calls.hst = calls.hst || []; calls.hst.push(['wp', u, b]); wpState.installed = true; },
@@ -558,4 +558,12 @@ test('a church deleted and added again: its gateway key comes back switched off,
 	const out = await fixReq(ctxOf(f), ch, stage, req, { state: 'no' }); assert.equal(out.ok, true); assert.match(out.detail, /switched back on/);
 	assert.ok(f.calls.gw.some((c) => c[0] === 'revoke' && c[1] === ch.slug && c[2] === false), 'the gateway was told to switch the key on');
 	const t = await req.test(ctxOf(f), ch); assert.equal(t.state, 'ok', t.detail);
+});
+
+test('a site Hostinger lists as PHP/HTML fails the WordPress check even when old files are on disk, and the fix installs WordPress', async () => {
+	const f = fakes({ siteTypes: { 'grace-church.churchwebglobal.com': 'php' } }); const ch = createStore(tmp()).create({ name: 'Grace Church' });
+	const stage = stageByKey('preview'), req = stage.reqs.find((q) => q.id === 'folder');
+	const t = await req.test(ctxOf(f), ch); assert.equal(t.state, 'no'); assert.match(t.detail, /"php" site, not WordPress/);
+	const out = await fixReq(ctxOf(f), { ...ch, contactEmail: 'office@grace.ca' }, stage, req, t); assert.equal(out.ok, true);
+	assert.ok((f.calls.hst || []).some((c) => c[0] === 'wp'), 'Hostinger was asked to install WordPress');
 });
