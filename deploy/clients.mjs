@@ -58,7 +58,7 @@ export function configFromEnv(env = process.env) {
 		wpCli: env.WP_CLI || 'wp',
 		staffLoginUser: clean(env.STAFF_LOGIN_USER) || 'churchweb', staffLoginPassword: String(env.STAFF_LOGIN_PASSWORD || '').trim(),
 		oxygenLicense: clean(env.OXYGEN_LICENSE_KEY || env.oxygen_license_key),
-		wpAdminEmail: clean(env.WP_ADMIN_EMAIL), hostingerApiBase: (env.HOSTINGER_API_BASE || 'https://developers.hostinger.com').replace(/\/$/, ''), hostingerApiKey: clean(env.HOSTINGER_API_KEY),
+		wpAdminEmail: clean(env.WP_ADMIN_EMAIL) || clean(env.SUPPORT_FROM) || ('support@' + (clean(env.PREVIEW_DOMAIN) || 'churchwebglobal.com')), // preview sites without a church email get the house address as WordPress admin hostingerApiBase: (env.HOSTINGER_API_BASE || 'https://developers.hostinger.com').replace(/\/$/, ''), hostingerApiKey: clean(env.HOSTINGER_API_KEY),
 		smartermailUrl: (() => { const u = clean(env.SMARTERMAIL_URL); return u ? (/^https?:\/\//i.test(u) ? u : 'https://' + u).replace(/\/$/, '') : ''; })(),
 		smartermailUser: clean(env.SMARTERMAIL_ADMIN_USER), smartermailPassword: String(env.SMARTERMAIL_ADMIN_PASSWORD || '').trim(),
 		smartermailDomainPath: env.SMARTERMAIL_DOMAIN_PATH || 'C:\\SmarterMail\\Domains\\{domain}', smartermailDomainAdmin: env.SMARTERMAIL_DOMAIN_ADMIN || 'postmaster',
