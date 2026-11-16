@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Convert to PDF · ChurchWeb Portal</title><meta name="robots" content="noindex,nofollow"><link rel="stylesheet" href="/assets/style.css"></head>
+<body><header id="topbar"></header><script src="/assets/nav.js"></script>
+<main><section class="card"><h2>Convert to PDF</h2>
+<p class="hint">Drop Word, Excel, PowerPoint or OpenDocument files here and get PDFs back. One file returns a PDF; several return a ZIP, or tick <b>Merge</b> for one combined PDF in the order listed. Files are converted in memory and not kept.</p>
+<div id="banner"></div>
+<div id="drop" class="dropzone" tabindex="0" role="button" aria-label="Choose files"><b>Drop files here</b> or click to choose<br><span class="hint" id="types"></span><input id="file" type="file" multiple hidden></div>
+<ul id="list" class="filelist"></ul>
+<div class="btns"><label><input type="checkbox" id="merge"> Merge into one PDF</label> &nbsp; <label><input type="checkbox" id="landscape"> Landscape</label> &nbsp; <button id="go" class="primary" type="button" disabled>Convert</button> <button id="clear" class="sm" type="button">Clear</button> <span class="hint" id="msg"></span></div>
+<p class="err" id="err"></p>
+<details style="margin-top:24px"><summary class="hint">For developers: the same conversion from a church site</summary>
+<p class="hint">POST <code>/api/v1/convert/pdf</code> as <code>multipart/form-data</code> with one or more <code>file</code> fields and the site's gateway token in <code>Authorization: Bearer …</code>. Add <code>merge=1</code> for one combined PDF. The response is a PDF (or a ZIP of PDFs). 120 conversions an hour per site, 25 MB per file.</p></details>
+</section></main>
+<script src="/assets/convert.js"></script></body></html>

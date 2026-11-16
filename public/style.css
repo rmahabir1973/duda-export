@@ -215,3 +215,9 @@ button[disabled]{opacity:.5;cursor:not-allowed}
 
 .exp-soon { color: #7a5a00; font-weight: 600; } .exp-past { color: #8a1f1f; font-weight: 600; }
 .navdot { display: inline-block; min-width: 18px; padding: 0 5px; border-radius: 9px; background: #b32d2e; color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; vertical-align: middle; }
+
+.dropzone { border: 2px dashed #c9c3d3; border-radius: 12px; padding: 36px 16px; text-align: center; cursor: pointer; background: #faf8fc; margin: 12px 0; }
+.dropzone.over, .dropzone:focus { border-color: #74277C; background: #f3ebf6; outline: none; }
+.filelist { list-style: none; padding: 0; margin: 0 0 12px; }
+.filelist li { display: flex; gap: 10px; align-items: center; padding: 6px 0; border-bottom: 1px solid #eee; }
+.filelist li span:first-child { flex: 1; word-break: break-all; }

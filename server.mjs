@@ -29,6 +29,8 @@ import { whmcsRouter } from './portal/whmcsRoutes.mjs';
 import { createRegistrar } from './portal/registrar.mjs';
 import { registrarRouter } from './portal/registrarRoutes.mjs';
 import { createSupportContext } from './portal/supportContext.mjs';
+import { createConverter } from './portal/convert.mjs';
+import { convertRouter, siteConvertRouter } from './portal/convertRoutes.mjs';
 import { createSupport } from './portal/support.mjs';
 import { supportRouter } from './portal/supportRoutes.mjs';
 import { createAnalytics, makeGa4 } from './portal/analytics.mjs';
@@ -388,6 +390,10 @@ if (hosted) {
 	const hours = Number(env.HOSTED_SYNC_HOURS ?? 6);
 	if (hours > 0) { const run = () => hosted.sync().then((r) => console.log('hosted sync:', Object.entries(r).map(([k, v]) => `${k} ${v.ok ? v.count : 'failed'}`).join(', '))).catch((e) => console.error('hosted sync:', e.message)); setTimeout(run, 45000).unref(); setInterval(run, hours * 3600 * 1000).unref(); }
 }
+// Document → PDF conversion through the Gotenberg service beside this one on Railway (CONVERT_URL, e.g. http://gotenberg.railway.internal:3000)
+const converter = createConverter({ url: env.CONVERT_URL || '' });
+app.use('/api/convert', convertRouter({ need, converter, audit: portal?.audit || null }));
+app.use('/api/v1/convert', siteConvertRouter({ converter, gateway: deployClients.gateway, audit: portal?.audit || null }));
 let registrar = null;
 const whmcsCfg = { url: (env.WHMCS_URL || '').trim(), accessKey: (env.WHMCS_ACCESS_KEY || '').trim() };
 const whmcsClient = makeWhmcsClient({ ...whmcsCfg, identifier: (env.WHMCS_API_IDENTIFIER || env.WHMCS_API_ID || '').trim(), secret: (env.WHMCS_API_SECRET || '').trim() });
@@ -433,6 +439,7 @@ app.get('/directory', page('directory.html', { dbOnly: true }));
 app.get('/activity', page('activity.html', { dbOnly: true }));
 app.get('/domains', page('domains.html', { dbOnly: true }));
 app.get('/registrar', page('registrar.html', { dbOnly: true }));
+app.get('/convert', page('convert.html', { dbOnly: true }));
 app.get('/whmcs', page('whmcs.html', { dbOnly: true }));
 app.get('/support', page('support.html', { dbOnly: true }));
 app.get('/analytics', page('analytics.html', { dbOnly: true }));

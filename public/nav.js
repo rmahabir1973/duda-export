@@ -9,6 +9,7 @@
 		{ label: 'Customers', pages: [['/customers', 'Customers'], ['/email', 'Email setup']] },
 		{ label: 'Directory', lvl: 'acct', pages: [['/directory', 'Directory']] },
 		{ label: 'Users', lvl: 'admin', pages: [['/users', 'Users']] },
+		{ label: 'Tools', lvl: 'acct', pages: [['/convert', 'Convert to PDF']] },
 		{ label: 'Support', lvl: 'acct', pages: [['/support', 'Support'], ['/registrar', 'Registrar', 'acct'], ['/domains', 'Domains', 'acct'], ['/analytics', 'Analytics', 'admin'], ['/whmcs', 'WHMCS', 'admin'], ['/activity', 'Activity', 'acct']] },
 	];
 	const here = location.pathname.replace(/\/$/, '') || '/';
