@@ -1,0 +1,31 @@
+#cwai-wizard .cww-steps { list-style: none; display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0; padding: 0; }
+#cwai-wizard .cww-steps li { background: #e9e9ee; color: #50575e; border-radius: 99px; padding: 6px 14px; font-size: 13px; cursor: default; }
+#cwai-wizard .cww-steps li b { display: inline-block; width: 20px; height: 20px; line-height: 20px; text-align: center; border-radius: 50%; background: #fff; margin-right: 4px; font-size: 12px; }
+#cwai-wizard .cww-steps li.on { background: #7a2a8e; color: #fff; }
+#cwai-wizard .cww-steps li.done { background: #e6f2e8; color: #1a5c2a; cursor: pointer; }
+#cwai-wizard .cww-card { background: #fff; border: 1px solid #dcdcde; border-radius: 10px; padding: 22px 26px; max-width: 1180px; }
+#cwai-wizard .cww-card h2 { margin-top: 0; }
+#cwai-wizard .cww-card h3 { margin: 22px 0 8px; }
+#cwai-wizard .cww-grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0 20px; }
+#cwai-wizard .cww-f { margin-bottom: 14px; }
+#cwai-wizard .cww-f label { display: block; font-weight: 600; margin-bottom: 4px; }
+#cwai-wizard .cww-f input[type=text], #cwai-wizard .cww-f input[type=tel], #cwai-wizard .cww-f input[type=email], #cwai-wizard .cww-f textarea, #cwai-wizard .cww-f select { width: 100%; max-width: 760px; }
+#cwai-wizard .cww-f small { display: block; color: #787c82; margin-top: 3px; }
+#cwai-wizard .cww-types { display: flex; flex-wrap: wrap; gap: 10px; margin: 6px 0 18px; }
+#cwai-wizard .cww-type { border: 2px solid #dcdcde; border-radius: 8px; padding: 10px 16px; cursor: pointer; font-weight: 600; }
+#cwai-wizard .cww-type.on { border-color: #7a2a8e; background: #f7eefa; }
+#cwai-wizard .cww-nav { display: flex; align-items: center; gap: 12px; margin-top: 22px; }
+#cwai-wizard .cww-err { color: #b32d2e; min-height: 1.2em; margin: 14px 0 0; font-weight: 600; }
+#cwai-wizard .cww-drop { border: 2px dashed #b9a6c2; border-radius: 10px; padding: 18px; background: #faf6fb; margin: 10px 0 16px; }
+#cwai-wizard .cww-imgs { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; }
+#cwai-wizard .cww-img { border: 1px solid #dcdcde; border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+#cwai-wizard .cww-img img { width: 100%; height: 120px; object-fit: contain; background: #f0f0f1; border-radius: 6px; }
+#cwai-wizard .cww-img select, #cwai-wizard .cww-img input { width: 100%; }
+#cwai-wizard .cww-pg { padding: 8px 0; border-bottom: 1px solid #f0f0f1; }
+#cwai-wizard .cww-pn { display: block; width: 100%; max-width: 640px; margin: 6px 0 0 24px; }
+#cwai-wizard .cww-sum { border-collapse: collapse; width: 100%; max-width: 900px; }
+#cwai-wizard .cww-sum th { text-align: left; width: 180px; vertical-align: top; padding: 8px 12px 8px 0; color: #50575e; }
+#cwai-wizard .cww-sum td { padding: 8px 0; }
+#cwai-wizard .cwd-current { background: #fff; border: 1px solid #7a2a8e; border-radius: 10px; padding: 12px 16px; margin: 12px 0; display: flex; flex-wrap: wrap; gap: 12px 22px; align-items: center; }
+#cwai-wizard .cwd-current label { display: flex; align-items: center; gap: 6px; }
+#cwai-wizard .cwd-current input[type=color] { width: 38px; height: 30px; padding: 0; border: 1px solid #8c8f94; border-radius: 4px; }
